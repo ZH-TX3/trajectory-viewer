@@ -1,0 +1,179 @@
+// ── Trajectory Table ─────────────────────────────────────────────────────
+//
+// Virtual-scrolled event ledger with a resizable detail panel.
+// Uses @tanstack/react-virtual for efficient rendering of large datasets.
+
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { TrajectoryCell } from './TrajectoryCell';
+import { TrajectoryDetail } from './TrajectoryDetail';
+import type { TrajectoryCellProps, TrajectoryTurnModel } from '../utils/layout';
+import { groupVirtualRows } from '../utils/layout';
+
+interface TrajectoryTableProps {
+  turns: readonly TrajectoryTurnModel[];
+  streamingCells?: TrajectoryCellProps[];
+  searchMatchIndexes?: ReadonlySet<number> | null;
+  timelineFocusIndexes?: ReadonlySet<number> | null;
+  collapsedTurns: ReadonlySet<number>;
+  _onToggleTurn?: (turn: number) => void;
+  _collapsedAssistants?: ReadonlySet<string>;
+  _onToggleAssistant?: (id: string) => void;
+}
+
+export function TrajectoryTable({
+  turns,
+  streamingCells = [],
+  searchMatchIndexes = null,
+  timelineFocusIndexes = null,
+  collapsedTurns,
+}: TrajectoryTableProps) {
+  const tablePaneRef = useRef<HTMLDivElement>(null);
+  const [selectedRecord, setSelectedRecord] = useState<TrajectoryCellProps | null>(null);
+  const [detailWidth, setDetailWidth] = useState(320);
+
+  // Flatten turns into records
+  const allRecords = useMemo(() => {
+    const records: TrajectoryCellProps[] = [];
+    for (const turn of turns) {
+      for (const group of turn.groups) {
+        for (const cell of group.cells) {
+          records.push(cell);
+        }
+      }
+    }
+    for (const cell of streamingCells) {
+      records.push(cell);
+    }
+    return records;
+  }, [turns, streamingCells]);
+
+  // Apply filters: search, collapse
+  const filteredRecords = useMemo(() => {
+    let records = allRecords;
+
+    if (searchMatchIndexes !== null) {
+      records = records.filter((r) => searchMatchIndexes.has(r.index));
+    }
+
+    if (collapsedTurns.size > 0) {
+      records = records.filter((r) => r.turn == null || !collapsedTurns.has(r.turn));
+    }
+
+    return records;
+  }, [allRecords, searchMatchIndexes, collapsedTurns]);
+
+  // Virtual rows
+  const virtualRows = useMemo(() => groupVirtualRows(filteredRecords), [filteredRecords]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: virtualRows.length,
+    getScrollElement: () => tablePaneRef.current,
+    estimateSize: () => 30,
+    overscan: 12,
+    getItemKey: (index) => virtualRows[index]?.key ?? String(index),
+  });
+
+  const handleRecordClick = useCallback((cell: TrajectoryCellProps) => {
+    setSelectedRecord((prev) => (prev?.index === cell.index ? null : cell));
+  }, []);
+
+  const handleCloseDetail = useCallback(() => {
+    setSelectedRecord(null);
+  }, []);
+
+  // Summary stats
+  const { totalTurns, totalCalls } = useMemo(() => {
+    let tc = 0;
+    let cc = 0;
+    for (const turn of turns) {
+      if (turn.turn != null) tc++;
+      for (const group of turn.groups) {
+        for (const cell of group.cells) {
+          if (cell.kind === 'tool' || cell.kind === 'subtool') cc++;
+        }
+      }
+    }
+    return { totalTurns: tc, totalCalls: cc };
+  }, [turns]);
+
+  return (
+    <div className="flex flex-1 min-h-0 overflow-hidden">
+      {/* Table pane */}
+      <div ref={tablePaneRef} className="flex-1 overflow-auto relative" style={{ minWidth: 0 }}>
+        <table className="w-full border-collapse">
+          <colgroup>
+            <col className="w-28" />
+            <col />
+          </colgroup>
+          <tbody>
+            <tr style={{ height: rowVirtualizer.getTotalSize() }}>
+              <td colSpan={2} className="p-0 border-0">
+                <div
+                  style={{
+                    height: rowVirtualizer.getTotalSize(),
+                    position: 'relative',
+                  }}
+                >
+                  {rowVirtualizer.getVirtualItems().map((virtualItem) => {
+                    const row = virtualRows[virtualItem.index];
+                    if (!row) return null;
+
+                    return (
+                      <div
+                        key={row.key}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualItem.start}px)`,
+                        }}
+                      >
+                        <table className="w-full border-collapse">
+                          <colgroup>
+                            <col className="w-28" />
+                            <col />
+                          </colgroup>
+                          <tbody>
+                            {row.entries.map((entry) => (
+                              <TrajectoryCell
+                                key={entry.cell.index}
+                                {...entry.cell}
+                                onClick={() => handleRecordClick(entry.cell)}
+                                selected={selectedRecord?.index === entry.cell.index}
+                                searchMatch={searchMatchIndexes?.has(entry.cell.index)}
+                                timelineFocus={timelineFocusIndexes?.has(entry.cell.index)}
+                              />
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })}
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Footer summary */}
+        <div className="px-3 py-2 text-[11px] text-muted-foreground border-t border-border/40 flex gap-4">
+          <span>{totalTurns} turns</span>
+          <span>{totalCalls} calls</span>
+          <span>{allRecords.length} records</span>
+        </div>
+      </div>
+
+      {/* Detail panel */}
+      {selectedRecord && (
+        <TrajectoryDetail
+          cell={selectedRecord}
+          onClose={handleCloseDetail}
+          detailWidth={detailWidth}
+          onWidthChange={setDetailWidth}
+        />
+      )}
+    </div>
+  );
+}

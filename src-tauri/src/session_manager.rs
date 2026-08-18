@@ -37,7 +37,7 @@ pub struct SessionMessage {
     pub ts: Option<i64>,
 }
 
-/// Scan all sessions from Claude Code and Codex.
+/// Scan all sessions from Claude Code, Codex, and DSH.
 pub fn scan_sessions() -> Vec<SessionMeta> {
     let mut sessions = Vec::new();
 
@@ -63,6 +63,17 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
         }
     }
 
+    // DSH: ~/.dsh/sessions/{project}/{session-id}/session.jsonl.zstd
+    if let Some(dsh_dir) = dsh_sessions_dir() {
+        let mut dsh_files = Vec::new();
+        collect_zstd_files_recursive(&dsh_dir, &mut dsh_files);
+        for path in dsh_files {
+            if let Some(meta) = parse_dsh_session(&path) {
+                sessions.push(meta);
+            }
+        }
+    }
+
     // Sort by last_active_at descending
     sessions.sort_by(|a, b| {
         let a_ts = a.last_active_at.or(a.created_at).unwrap_or(0);
@@ -79,6 +90,7 @@ pub fn load_messages(provider_id: &str, source_path: &str) -> Result<Vec<Session
     match provider_id {
         "claude" => load_claude_messages(path),
         "codex" => load_codex_messages(path),
+        "dsh" => crate::trajectory::parser::dsh::load_messages(path),
         _ => Err(format!("Unsupported provider: {provider_id}")),
     }
 }
@@ -430,12 +442,104 @@ fn codex_project_group(path: &Path) -> Option<String> {
     Some(format!("{}-{}", y, m))
 }
 
+// ── DSH ──────────────────────────────────────────────────────────────────
+
+fn dsh_sessions_dir() -> Option<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    let dir = PathBuf::from(home).join(".dsh").join("sessions");
+    if dir.exists() { Some(dir) } else { None }
+}
+
+fn dsh_project_group(path: &Path) -> Option<String> {
+    // DSH path: .../sessions/{project}/{session-id}/session.jsonl.zstd
+    // project group is the grandparent directory name
+    let session_dir = path.parent()?;
+    let project_dir = session_dir.parent()?;
+    let name = project_dir.file_name()?.to_str()?;
+    Some(decode_project_name(name))
+}
+
+/// Parse a DSH session by reading its metadata line.
+fn parse_dsh_session(path: &Path) -> Option<SessionMeta> {
+    use std::io::Read;
+
+    // Decompress just enough to get the session metadata line
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut compressed = Vec::new();
+    file.read_to_end(&mut compressed).ok()?;
+
+    let mut decompressed = Vec::new();
+    let mut decoder = zstd::Decoder::new(std::io::Cursor::new(&compressed)).ok()?;
+    let mut buf = [0u8; 4096];
+    let n = decoder.read(&mut buf).ok()?;
+    decompressed.extend_from_slice(&buf[..n]);
+
+    let text = std::str::from_utf8(&decompressed).ok()?;
+    let first_line = text.lines().next()?;
+    let value: serde_json::Value = serde_json::from_str(first_line).ok()?;
+
+    let session_id = value["id"].as_str()?.to_string();
+    let created_at = value["createdAt"].as_i64();
+    let project_dir = value["cwd"].as_str().map(|s| s.to_string());
+
+    // Look for user/message to get title
+    let mut title: Option<String> = None;
+    for line in text.lines().skip(1).take(10) {
+        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+        if v["type"].as_str() == Some("user/message") {
+            if let Some(content) = v["data"]["content"].as_array() {
+                for item in content {
+                    if let Some(text) = item["text"].as_str() {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() && !trimmed.starts_with('<') {
+                            title = Some(trimmed.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+            if title.is_some() { break; }
+        }
+    }
+
+    Some(SessionMeta {
+        provider_id: "dsh".to_string(),
+        session_id,
+        title: title.map(|t| truncate(&t, 80)),
+        summary: None,
+        project_dir,
+        project_group: dsh_project_group(path),
+        created_at,
+        last_active_at: created_at,
+        source_path: Some(path.to_string_lossy().to_string()),
+        resume_command: None,
+    })
+}
+
+fn collect_zstd_files_recursive(root: &Path, files: &mut Vec<PathBuf>) {
+    if !root.exists() { return; }
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_zstd_files_recursive(&path, files);
+        } else if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+            if ext == "zstd" || ext == "zst" {
+                files.push(path);
+            }
+        }
+    }
+}
+
 /// Decode a project directory name like "D--DSH" → "D:/DSH"
 fn decode_project_name(name: &str) -> String {
-    // Claude Code encodes paths like "D--DSH" or "C--Users---"
-    // Replace "--" with ":/" for the drive letter, then "--" with "/"
+    // DSH/Claude Code encodes paths like "D--DSH" or "C--Users---"
     let mut result = name.to_string();
-    // First occurrence of "--" separates drive letter from path
     if let Some(idx) = result.find("--") {
         let drive = &result[..idx];
         let rest = &result[idx + 2..];

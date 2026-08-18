@@ -78,6 +78,31 @@ use std::path::Path;
 
 /// Inspect the first lines of a JSONL file and identify the provider format.
 pub fn detect_provider(path: &Path) -> Result<String, String> {
+    // Check if it's a zstd-compressed DSH file
+    let is_zstd = path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext == "zstd" || ext == "zst")
+        .unwrap_or(false);
+
+    if is_zstd {
+        // DSH files are zstd-compressed JSONL
+        if let Ok(content) = decompress_head(path, 5) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() { continue; }
+                let json: serde_json::Value = match serde_json::from_str(trimmed) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let line_type = json["type"].as_str().unwrap_or("");
+                if line_type == "session" || line_type == "user/message" || line_type == "assistant/message" {
+                    return Ok("dsh".to_string());
+                }
+            }
+        }
+        return Err("Unable to detect provider in zstd file".to_string());
+    }
+
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
@@ -99,6 +124,18 @@ pub fn detect_provider(path: &Path) -> Result<String, String> {
         };
 
         let line_type = json["type"].as_str().unwrap_or("").to_string();
+
+        // DSH format (plain JSONL, not compressed)
+        if matches!(
+            line_type.as_str(),
+            "user/message" | "assistant/message" | "tool/call" | "tool/result"
+        ) {
+            return Ok("dsh".to_string());
+        }
+        // DSH session metadata
+        if line_type == "session" && json["id"].as_str().is_some() {
+            return Ok("dsh".to_string());
+        }
 
         // Codex marks every payload-bearing line with `type: "response_item"`.
         if line_type == "response_item" {
@@ -123,7 +160,36 @@ pub fn detect_provider(path: &Path) -> Result<String, String> {
         }
     }
 
-    Err("Unable to detect provider. Only Claude Code and Codex session logs are supported.".to_string())
+    Err("Unable to detect provider. Supported formats: Claude Code, Codex, DSH.".to_string())
+}
+
+/// Decompress the first few lines of a zstd file.
+fn decompress_head(path: &Path, max_lines: usize) -> Result<String, String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open: {e}"))?;
+    let mut compressed = Vec::new();
+    file.read_to_end(&mut compressed).map_err(|e| format!("Read error: {e}"))?;
+
+    // Decompress in chunks, only read enough to get the first few lines
+    let mut decompressed = Vec::new();
+    let mut decoder = zstd::Decoder::new(std::io::Cursor::new(&compressed))
+        .map_err(|e| format!("Zstd error: {e}"))?;
+
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = decoder.read(&mut buf).map_err(|e| format!("Decompress error: {e}"))?;
+        if n == 0 { break; }
+        decompressed.extend_from_slice(&buf[..n]);
+
+        // Check if we have enough lines
+        let text = std::str::from_utf8(&decompressed)
+            .map_err(|_| "Invalid UTF-8".to_string())?;
+        if text.lines().count() >= max_lines {
+            break;
+        }
+    }
+
+    String::from_utf8(decompressed).map_err(|e| format!("UTF-8 error: {e}"))
 }
 
 /// Parse a trajectory file, auto-detecting the provider.
@@ -137,6 +203,7 @@ pub fn parse_trajectory(provider_id: &str, source_path: &str) -> Result<Trajecto
     let path = Path::new(source_path);
     let (session_id, events) = match provider_id {
         "codex" => parser::codex::parse_trajectory(path)?,
+        "dsh" => parser::dsh::parse_trajectory(path)?,
         "claude" => parser::claude::parse_trajectory(path)?,
         _ => return Err(format!("Trajectory not yet supported for provider: {provider_id}")),
     };

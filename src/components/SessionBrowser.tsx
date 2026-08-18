@@ -17,7 +17,7 @@ interface SessionBrowserProps {
 }
 
 type Tab = 'messages' | 'trajectory';
-type ProviderFilter = 'all' | 'claude' | 'codex';
+type ProviderFilter = 'all' | 'claude' | 'codex' | 'dsh';
 
 // ── Provider Icons ───────────────────────────────────────────────────────
 
@@ -38,6 +38,16 @@ function CodexIcon({ className }: { className?: string }) {
       <rect x="4" y="4" width="24" height="24" rx="6" fill="currentColor" opacity="0.15" />
       <path d="M12 20l4-4-4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M18 20h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DshIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path d="M6 6h20v20H6z" fill="currentColor" opacity="0.12" rx="4" />
+      <path d="M10 16l4-4 4 4-4 4-4-4z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path d="M18 18h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -195,11 +205,15 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
   const providerColor = (id: string) => {
     return id === 'claude'
       ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
+      : id === 'dsh'
+      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
       : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
   };
 
   const providerIcon = (id: string) => {
-    return id === 'claude' ? 'text-violet-600 dark:text-violet-400' : 'text-emerald-600 dark:text-emerald-400';
+    return id === 'claude' ? 'text-violet-600 dark:text-violet-400'
+      : id === 'dsh' ? 'text-amber-600 dark:text-amber-400'
+      : 'text-emerald-600 dark:text-emerald-400';
   };
 
   const claudeCount = sessions.filter((s) => s.providerId === 'claude').length;
@@ -251,6 +265,19 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
               <span>Codex</span>
               <span className="text-[10px] opacity-60">{codexCount}</span>
             </button>
+            {/* DSH */}
+            <button
+              onClick={() => setProviderFilter('dsh')}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                providerFilter === 'dsh'
+                  ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+              }`}
+            >
+              <DshIcon className="size-3.5" />
+              <span>DSH</span>
+              <span className="text-[10px] opacity-60">{dshCount}</span>
+            </button>
           </div>
         </div>
 
@@ -300,7 +327,7 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
                         >
                           {/* Provider icon */}
                           <div className={`shrink-0 mt-0.5 ${providerIcon(session.providerId)}`}>
-                            {session.providerId === 'claude' ? <ClaudeIcon className="size-3.5" /> : <CodexIcon className="size-3.5" />}
+                            {session.providerId === 'claude' ? <ClaudeIcon className="size-3.5" /> : session.providerId === 'dsh' ? <DshIcon className="size-3.5" /> : <CodexIcon className="size-3.5" />}
                           </div>
 
                           <div className="flex-1 min-w-0">
@@ -355,7 +382,7 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
             {/* Session header */}
             <div className="h-10 border-b border-border/40 flex items-center gap-2 px-3 shrink-0 bg-background/95">
               <div className={`${providerIcon(selectedSession.providerId)}`}>
-                {selectedSession.providerId === 'claude' ? <ClaudeIcon className="size-4" /> : <CodexIcon className="size-4" />}
+                {selectedSession.providerId === 'claude' ? <ClaudeIcon className="size-4" /> : selectedSession.providerId === 'dsh' ? <DshIcon className="size-4" /> : <CodexIcon className="size-4" />}
               </div>
               <span className="text-xs font-medium truncate">{sessionTitle(selectedSession)}</span>
 
@@ -449,7 +476,7 @@ function groupByProject(sessions: SessionMeta[], filter: ProviderFilter): Groupe
   for (const session of sessions) {
     const groupName = session.projectGroup
       ?? session.projectDir
-      ?? (session.providerId === 'claude' ? 'Claude Code' : 'Codex');
+      ?? (session.providerId === 'claude' ? 'Claude Code' : session.providerId === 'dsh' ? 'DSH' : 'Codex');
 
     const existing = groups.get(groupName);
     if (existing) {

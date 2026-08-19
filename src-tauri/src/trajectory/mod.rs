@@ -79,7 +79,8 @@ use std::path::Path;
 /// Inspect the first lines of a JSONL file and identify the provider format.
 pub fn detect_provider(path: &Path) -> Result<String, String> {
     // Check if it's a zstd-compressed DSH file
-    let is_zstd = path.extension()
+    let is_zstd = path
+        .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext == "zstd" || ext == "zst")
         .unwrap_or(false);
@@ -89,13 +90,18 @@ pub fn detect_provider(path: &Path) -> Result<String, String> {
         if let Ok(content) = decompress_head(path, 5) {
             for line in content.lines() {
                 let trimmed = line.trim();
-                if trimmed.is_empty() { continue; }
+                if trimmed.is_empty() {
+                    continue;
+                }
                 let json: serde_json::Value = match serde_json::from_str(trimmed) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
                 let line_type = json["type"].as_str().unwrap_or("");
-                if line_type == "session" || line_type == "user/message" || line_type == "assistant/message" {
+                if line_type == "session"
+                    || line_type == "user/message"
+                    || line_type == "assistant/message"
+                {
                     return Ok("dsh".to_string());
                 }
             }
@@ -168,7 +174,8 @@ fn decompress_head(path: &Path, max_lines: usize) -> Result<String, String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open: {e}"))?;
     let mut compressed = Vec::new();
-    file.read_to_end(&mut compressed).map_err(|e| format!("Read error: {e}"))?;
+    file.read_to_end(&mut compressed)
+        .map_err(|e| format!("Read error: {e}"))?;
 
     // Decompress in chunks, only read enough to get the first few lines
     let mut decompressed = Vec::new();
@@ -177,13 +184,16 @@ fn decompress_head(path: &Path, max_lines: usize) -> Result<String, String> {
 
     let mut buf = [0u8; 8192];
     loop {
-        let n = decoder.read(&mut buf).map_err(|e| format!("Decompress error: {e}"))?;
-        if n == 0 { break; }
+        let n = decoder
+            .read(&mut buf)
+            .map_err(|e| format!("Decompress error: {e}"))?;
+        if n == 0 {
+            break;
+        }
         decompressed.extend_from_slice(&buf[..n]);
 
         // Check if we have enough lines
-        let text = std::str::from_utf8(&decompressed)
-            .map_err(|_| "Invalid UTF-8".to_string())?;
+        let text = std::str::from_utf8(&decompressed).map_err(|_| "Invalid UTF-8".to_string())?;
         if text.lines().count() >= max_lines {
             break;
         }
@@ -205,7 +215,11 @@ pub fn parse_trajectory(provider_id: &str, source_path: &str) -> Result<Trajecto
         "codex" => parser::codex::parse_trajectory(path)?,
         "dsh" => parser::dsh::parse_trajectory(path)?,
         "claude" => parser::claude::parse_trajectory(path)?,
-        _ => return Err(format!("Trajectory not yet supported for provider: {provider_id}")),
+        _ => {
+            return Err(format!(
+                "Trajectory not yet supported for provider: {provider_id}"
+            ))
+        }
     };
 
     let mut total_input_tokens: Option<i64> = None;

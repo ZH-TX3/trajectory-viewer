@@ -21,8 +21,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::trajectory::{ContentBlock, TrajectoryEvent};
 use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms};
+use crate::trajectory::{ContentBlock, TrajectoryEvent};
 
 /// Parse a DSH session file (zstd-compressed JSONL) into trajectory events.
 pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), String> {
@@ -76,17 +76,28 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                 let content_blocks = extract_content_blocks_from_value(&data["content"]);
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: "user-message".to_string(),
                     role: Some("user".to_string()),
                     content: Some(content),
                     content_blocks: Some(content_blocks),
-                    tool_call_id: None, tool_name: None, tool_args: None, tool_result: None, is_error: None,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens: None, output_tokens: None, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model: None, provider: Some("dsh".to_string()),
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_args: None,
+                    tool_result: None,
+                    is_error: None,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model: None,
+                    provider: Some("dsh".to_string()),
                 });
             }
 
@@ -121,24 +132,42 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                 let content_blocks = extract_content_blocks_from_value(&message["content"]);
 
                 // Extract token usage from the last chunk
-                let (input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens) = (None, None, None, None, None);
+                let (
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                ) = (None, None, None, None, None);
 
-                let model = json["data"]["model"].as_str()
+                let model = json["data"]["model"]
+                    .as_str()
                     .or_else(|| message["model"].as_str())
                     .map(|s| s.to_string());
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: "assistant-message".to_string(),
                     role: Some("assistant".to_string()),
                     content: Some(content),
                     content_blocks: Some(content_blocks),
-                    tool_call_id: None, tool_name: None, tool_args: None, tool_result: None, is_error: None,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens, output_tokens, reasoning_tokens,
-                    cache_read_tokens, cache_write_tokens,
-                    model, provider: Some("dsh".to_string()),
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_args: None,
+                    tool_result: None,
+                    is_error: None,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                    model,
+                    provider: Some("dsh".to_string()),
                 });
             }
 
@@ -150,21 +179,27 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
 
                 let data = &json["data"];
 
-                let call_id = data["callId"].as_str()
+                let call_id = data["callId"]
+                    .as_str()
                     .or_else(|| data["toolCall"]["id"].as_str())
                     .map(|s| s.to_string());
 
-                let tool_name = data["name"].as_str()
+                let tool_name = data["name"]
+                    .as_str()
                     .or_else(|| data["toolCall"]["name"].as_str())
                     .map(|s| s.to_string());
 
-                let tool_args = data["arguments"].as_str()
+                let tool_args = data["arguments"]
+                    .as_str()
                     .map(|s| s.to_string())
                     .or_else(|| {
-                        data["toolCall"]["arguments"].as_str().map(|s| s.to_string())
+                        data["toolCall"]["arguments"]
+                            .as_str()
+                            .map(|s| s.to_string())
                     })
                     .or_else(|| {
-                        data["toolCall"]["input"].as_object()
+                        data["toolCall"]["input"]
+                            .as_object()
                             .map(|obj| serde_json::to_string(obj).unwrap_or_default())
                     });
 
@@ -181,17 +216,28 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                 }
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: "tool-call".to_string(),
                     role: Some("assistant".to_string()),
-                    content: None, content_blocks: None,
-                    tool_call_id: call_id, tool_name, tool_args,
-                    tool_result: None, is_error: None,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens: None, output_tokens: None, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model: None, provider: Some("dsh".to_string()),
+                    content: None,
+                    content_blocks: None,
+                    tool_call_id: call_id,
+                    tool_name,
+                    tool_args,
+                    tool_result: None,
+                    is_error: None,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model: None,
+                    provider: Some("dsh".to_string()),
                 });
             }
 
@@ -205,25 +251,28 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     current_step = step as usize;
                 }
 
-                let call_id = message["source"]["callId"].as_str()
-                    .map(|s| s.to_string());
+                let call_id = message["source"]["callId"].as_str().map(|s| s.to_string());
 
                 let tool_result = if let Some(content) = message["content"].as_array() {
-                    Some(content.iter()
-                        .filter_map(|item| {
-                            if item["type"].as_str() == Some("text") {
-                                item["text"].as_str().map(|s| s.to_string())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"))
+                    Some(
+                        content
+                            .iter()
+                            .filter_map(|item| {
+                                if item["type"].as_str() == Some("text") {
+                                    item["text"].as_str().map(|s| s.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    )
                 } else {
                     None
                 };
 
-                let is_error = data["isError"].as_bool()
+                let is_error = data["isError"]
+                    .as_bool()
                     .or_else(|| message["isError"].as_bool());
 
                 // Look up the tool name from tracker
@@ -232,41 +281,62 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     .and_then(|id| tool_call_tracker.get(id))
                     .cloned()
                     .unwrap_or((String::new(), String::new()));
-                let tool_name = if tracked_name.is_empty() { None } else { Some(tracked_name) };
-                let tool_args = if tracked_args.is_empty() { None } else { Some(tracked_args) };
+                let tool_name = if tracked_name.is_empty() {
+                    None
+                } else {
+                    Some(tracked_name)
+                };
+                let tool_args = if tracked_args.is_empty() {
+                    None
+                } else {
+                    Some(tracked_args)
+                };
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: "tool-result".to_string(),
                     role: Some("tool".to_string()),
-                    content: None, content_blocks: None,
-                    tool_call_id: call_id, tool_name, tool_args,
-                    tool_result, is_error,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens: None, output_tokens: None, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model: None, provider: Some("dsh".to_string()),
+                    content: None,
+                    content_blocks: None,
+                    tool_call_id: call_id,
+                    tool_name,
+                    tool_args,
+                    tool_result,
+                    is_error,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model: None,
+                    provider: Some("dsh".to_string()),
                 });
             }
 
-            // Skip streaming chunks, turn/step boundaries, and other metadata
-            "assistant/chunk" | "turn/start" | "turn/end" | "step/start" | "step/end"
-            | "session/title" | "session/title-llm-request" | "session/end-seed"
-            | "request/header" | "request/context"
-            | "agent/inbox/spliced" | "permission/preset" | "sandbox/mode"
-            | "approval/policy" | "text-chunks" | "tool-call-chunks" => {
-                // Extract token usage from finish chunks
-                if line_type == "assistant/chunk" {
-                    if let Some(chunk) = json["data"]["chunk"].as_object() {
-                        if chunk.get("type").and_then(|v| v.as_str()) == Some("usage") {
-                            if let Some(usage) = chunk.get("usage") {
-                                // We'll extract these from the assistant/message events instead
-                            }
-                        }
-                    }
-                }
-            }
+            // Skip streaming chunks; token usage is extracted from assistant/message events
+            "assistant/chunk" => {}
+
+            // Skip turn/step boundaries and other metadata
+            "turn/start"
+            | "turn/end"
+            | "step/start"
+            | "step/end"
+            | "session/title"
+            | "session/title-llm-request"
+            | "session/end-seed"
+            | "request/header"
+            | "request/context"
+            | "agent/inbox/spliced"
+            | "permission/preset"
+            | "sandbox/mode"
+            | "approval/policy"
+            | "text-chunks"
+            | "tool-call-chunks" => {}
 
             "session" => {
                 // Session metadata already handled above
@@ -302,18 +372,17 @@ fn parse_dsh_timestamp(value: &Value) -> Option<i64> {
 fn extract_content_from_blocks(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
-        Value::Array(arr) => {
-            arr.iter()
-                .filter_map(|item| {
-                    if item["type"].as_str() == Some("text") {
-                        item["text"].as_str().map(|s| s.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|item| {
+                if item["type"].as_str() == Some("text") {
+                    item["text"].as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         _ => String::new(),
     }
 }
@@ -327,7 +396,10 @@ fn extract_content_blocks_from_value(value: &Value) -> Vec<ContentBlock> {
             blocks.push(ContentBlock {
                 block_type: "text".to_string(),
                 text: Some(text.clone()),
-                tool_call_id: None, tool_name: None, tool_args: None, image_src: None,
+                tool_call_id: None,
+                tool_name: None,
+                tool_args: None,
+                image_src: None,
             });
         }
         Value::Array(arr) => {
@@ -336,30 +408,61 @@ fn extract_content_blocks_from_value(value: &Value) -> Vec<ContentBlock> {
                 let text = item["text"].as_str().map(|s| s.to_string());
                 let tool_call_id = item["id"].as_str().map(|s| s.to_string());
                 let tool_name = item["name"].as_str().map(|s| s.to_string());
-                let tool_args = item["input"].as_object()
+                let tool_args = item["input"]
+                    .as_object()
                     .map(|obj| serde_json::to_string(obj).unwrap_or_default())
                     .or_else(|| item["arguments"].as_str().map(|s| s.to_string()));
-                let image_src = item["source"]["url"].as_str()
+                let image_src = item["source"]["url"]
+                    .as_str()
                     .or_else(|| item["source"]["path"].as_str())
                     .map(|s| s.to_string());
 
                 blocks.push(ContentBlock {
-                    block_type, text, tool_call_id, tool_name, tool_args, image_src,
+                    block_type,
+                    text,
+                    tool_call_id,
+                    tool_name,
+                    tool_args,
+                    image_src,
                 });
             }
         }
         Value::Object(obj) => {
-            let block_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("text").to_string();
-            let text = obj.get("text").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let tool_call_id = obj.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let tool_name = obj.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let tool_args = obj.get("input").and_then(|v| v.as_object())
+            let block_type = obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("text")
+                .to_string();
+            let text = obj
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tool_call_id = obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tool_name = obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tool_args = obj
+                .get("input")
+                .and_then(|v| v.as_object())
                 .map(|obj| serde_json::to_string(obj).unwrap_or_default())
-                .or_else(|| obj.get("arguments").and_then(|v| v.as_str()).map(|s| s.to_string()));
+                .or_else(|| {
+                    obj.get("arguments")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
             let image_src = None;
 
             blocks.push(ContentBlock {
-                block_type, text, tool_call_id, tool_name, tool_args, image_src,
+                block_type,
+                text,
+                tool_call_id,
+                tool_name,
+                tool_args,
+                image_src,
             });
         }
         _ => {}
@@ -378,17 +481,18 @@ pub fn load_messages(path: &Path) -> Result<Vec<crate::session_manager::SessionM
     let decompressed = zstd::decode_all(std::io::Cursor::new(&compressed))
         .map_err(|e| format!("Failed to decompress: {e}"))?;
 
-    let content = String::from_utf8(decompressed)
-        .map_err(|e| format!("Invalid UTF-8: {e}"))?;
+    let content = String::from_utf8(decompressed).map_err(|e| format!("Invalid UTF-8: {e}"))?;
 
     let mut messages = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
 
-        let json: Value = serde_json::from_str(trimmed)
-            .map_err(|e| format!("Invalid JSON: {e}"))?;
+        let json: Value =
+            serde_json::from_str(trimmed).map_err(|e| format!("Invalid JSON: {e}"))?;
 
         let line_type = json["type"].as_str().unwrap_or("");
 
@@ -411,15 +515,13 @@ pub fn load_messages(path: &Path) -> Result<Vec<crate::session_manager::SessionM
                     .as_array()
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|item| {
-                                match item["type"].as_str() {
-                                    Some("text") => item["text"].as_str().map(|s| s.to_string()),
-                                    Some("tool-call") => {
-                                        let name = item["name"].as_str().unwrap_or("unknown");
-                                        Some(format!("[Tool: {name}]"))
-                                    }
-                                    _ => None,
+                            .filter_map(|item| match item["type"].as_str() {
+                                Some("text") => item["text"].as_str().map(|s| s.to_string()),
+                                Some("tool-call") => {
+                                    let name = item["name"].as_str().unwrap_or("unknown");
+                                    Some(format!("[Tool: {name}]"))
                                 }
+                                _ => None,
                             })
                             .collect::<Vec<_>>()
                             .join("\n")
@@ -486,11 +588,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("session.jsonl.zstd");
 
-        create_dsh_session(&path, &[
-            r#"{"type":"session","id":"sess-1","createdAt":1787023345223,"cwd":"/tmp/project","delegationDepth":0,"agentPreset":"router-standard"}"#,
-            r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"content":[{"type":"text","text":"hello"}]}}"#,
-            r#"{"type":"assistant/message","seq":2,"time":1787023347000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"Hi there!"}],"source":{"kind":"assistant","model":"deepseek-chat"}}}}"#,
-        ]);
+        create_dsh_session(
+            &path,
+            &[
+                r#"{"type":"session","id":"sess-1","createdAt":1787023345223,"cwd":"/tmp/project","delegationDepth":0,"agentPreset":"router-standard"}"#,
+                r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"content":[{"type":"text","text":"hello"}]}}"#,
+                r#"{"type":"assistant/message","seq":2,"time":1787023347000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"Hi there!"}],"source":{"kind":"assistant","model":"deepseek-chat"}}}}"#,
+            ],
+        );
 
         let (sid, events) = parse_trajectory(&path).unwrap();
         assert_eq!(sid, "sess-1");
@@ -506,13 +611,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("session.jsonl.zstd");
 
-        create_dsh_session(&path, &[
-            r#"{"type":"session","id":"sess-2","createdAt":1787023345223,"cwd":"/tmp"}"#,
-            r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"content":[{"type":"text","text":"list files"}]}}"#,
-            r#"{"type":"assistant/message","seq":2,"time":1787023347000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"Checking..."},{"type":"tool-call","id":"call_1","name":"Bash","input":{"command":"ls"}}],"source":{"kind":"assistant","model":"deepseek-chat"}}}}"#,
-            r#"{"type":"tool/call","seq":3,"time":1787023347001,"data":{"turn":1,"step":1,"callId":"call_1","name":"Bash","arguments":"{\"command\":\"ls\"}"}}"#,
-            r#"{"type":"tool/result","seq":4,"time":1787023348000,"data":{"turn":1,"step":1,"message":{"source":{"kind":"tool","callId":"call_1"},"content":[{"type":"text","text":"file1.txt\nfile2.txt"}],"role":"tool"}}}"#,
-        ]);
+        create_dsh_session(
+            &path,
+            &[
+                r#"{"type":"session","id":"sess-2","createdAt":1787023345223,"cwd":"/tmp"}"#,
+                r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"content":[{"type":"text","text":"list files"}]}}"#,
+                r#"{"type":"assistant/message","seq":2,"time":1787023347000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"Checking..."},{"type":"tool-call","id":"call_1","name":"Bash","input":{"command":"ls"}}],"source":{"kind":"assistant","model":"deepseek-chat"}}}}"#,
+                r#"{"type":"tool/call","seq":3,"time":1787023347001,"data":{"turn":1,"step":1,"callId":"call_1","name":"Bash","arguments":"{\"command\":\"ls\"}"}}"#,
+                r#"{"type":"tool/result","seq":4,"time":1787023348000,"data":{"turn":1,"step":1,"message":{"source":{"kind":"tool","callId":"call_1"},"content":[{"type":"text","text":"file1.txt\nfile2.txt"}],"role":"tool"}}}"#,
+            ],
+        );
 
         let (sid, events) = parse_trajectory(&path).unwrap();
         assert_eq!(sid, "sess-2");
@@ -522,16 +630,21 @@ mod tests {
         assert_eq!(events[2].event_type, "tool-call");
         assert_eq!(events[3].event_type, "tool-result");
         assert_eq!(events[2].tool_name.as_deref(), Some("Bash"));
-        assert!(events[3].tool_result.as_deref().unwrap().contains("file1.txt"));
+        assert!(events[3]
+            .tool_result
+            .as_deref()
+            .unwrap()
+            .contains("file1.txt"));
     }
 
     #[test]
     fn parse_dsh_empty_session() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("session.jsonl.zstd");
-        create_dsh_session(&path, &[
-            r#"{"type":"session","id":"sess-empty","createdAt":1787023345223,"cwd":"/tmp"}"#,
-        ]);
+        create_dsh_session(
+            &path,
+            &[r#"{"type":"session","id":"sess-empty","createdAt":1787023345223,"cwd":"/tmp"}"#],
+        );
 
         let (sid, events) = parse_trajectory(&path).unwrap();
         assert_eq!(sid, "sess-empty");

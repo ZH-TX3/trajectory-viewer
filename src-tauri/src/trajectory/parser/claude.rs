@@ -12,8 +12,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::trajectory::{ContentBlock, TrajectoryEvent};
 use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms};
+use crate::trajectory::{ContentBlock, TrajectoryEvent};
 
 /// Parse a Claude Code JSONL session file into trajectory events.
 pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), String> {
@@ -33,13 +33,10 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
             continue;
         }
 
-        let json: Value = serde_json::from_str(&trimmed)
-            .map_err(|e| format!("Invalid JSON: {e}"))?;
+        let json: Value =
+            serde_json::from_str(&trimmed).map_err(|e| format!("Invalid JSON: {e}"))?;
 
-        let line_type = json["type"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
+        let line_type = json["type"].as_str().unwrap_or("unknown").to_string();
 
         let ts = parse_timestamp_to_ms(&json["timestamp"]).unwrap_or(0);
 
@@ -53,15 +50,25 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
         match line_type.as_str() {
             "user" | "user_message" | "user-message" => {
                 push_user_events(
-                    &mut events, &mut seq, ts, &json,
-                    &tool_call_tracker, &mut current_turn, &mut current_step,
+                    &mut events,
+                    &mut seq,
+                    ts,
+                    &json,
+                    &tool_call_tracker,
+                    &mut current_turn,
+                    &mut current_step,
                 );
             }
 
             "assistant" | "assistant_message" | "assistant-message" | "text" => {
                 push_assistant_events(
-                    &mut events, &mut seq, ts, &json,
-                    &mut tool_call_tracker, &mut current_turn, &mut current_step,
+                    &mut events,
+                    &mut seq,
+                    ts,
+                    &json,
+                    &mut tool_call_tracker,
+                    &mut current_turn,
+                    &mut current_step,
                 );
             }
 
@@ -86,9 +93,7 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                 let tool_args: Option<String> = json["tool_args"]
                     .as_str()
                     .map(|s| s.to_string())
-                    .or_else(|| {
-                        json["message"]["tool_args"].as_str().map(|s| s.to_string())
-                    })
+                    .or_else(|| json["message"]["tool_args"].as_str().map(|s| s.to_string()))
                     .or_else(|| {
                         json["tool_use"]["input"]
                             .as_object()
@@ -103,16 +108,28 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                 }
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: "tool-call".to_string(),
                     role: Some("assistant".to_string()),
-                    content: None, content_blocks: None,
-                    tool_call_id, tool_name, tool_args, tool_result: None, is_error: None,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens: None, output_tokens: None, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model: None, provider: Some("claude".to_string()),
+                    content: None,
+                    content_blocks: None,
+                    tool_call_id,
+                    tool_name,
+                    tool_args,
+                    tool_result: None,
+                    is_error: None,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model: None,
+                    provider: Some("claude".to_string()),
                 });
             }
 
@@ -140,20 +157,40 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     .and_then(|id| tool_call_tracker.get(id))
                     .cloned()
                     .unwrap_or((String::new(), String::new()));
-                let tool_name = if tracked_name.is_empty() { None } else { Some(tracked_name) };
-                let tool_args = if tracked_args.is_empty() { None } else { Some(tracked_args) };
+                let tool_name = if tracked_name.is_empty() {
+                    None
+                } else {
+                    Some(tracked_name)
+                };
+                let tool_args = if tracked_args.is_empty() {
+                    None
+                } else {
+                    Some(tracked_args)
+                };
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: "tool-result".to_string(),
                     role: Some("user".to_string()),
-                    content: None, content_blocks: None,
-                    tool_call_id, tool_name, tool_args, tool_result, is_error,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens: None, output_tokens: None, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model: None, provider: Some("claude".to_string()),
+                    content: None,
+                    content_blocks: None,
+                    tool_call_id,
+                    tool_name,
+                    tool_args,
+                    tool_result,
+                    is_error,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model: None,
+                    provider: Some("claude".to_string()),
                 });
             }
 
@@ -240,21 +277,40 @@ fn push_user_events(
             .and_then(|id| tool_call_tracker.get(id))
             .cloned()
             .unwrap_or((String::new(), String::new()));
-        let tool_name = if tracked_name.is_empty() { None } else { Some(tracked_name) };
-        let tool_args = if tracked_args.is_empty() { None } else { Some(tracked_args) };
+        let tool_name = if tracked_name.is_empty() {
+            None
+        } else {
+            Some(tracked_name)
+        };
+        let tool_args = if tracked_args.is_empty() {
+            None
+        } else {
+            Some(tracked_args)
+        };
 
         events.push(TrajectoryEvent {
-            seq: *seq, ts,
+            seq: *seq,
+            ts,
             event_type: "tool-result".to_string(),
             role: Some("user".to_string()),
-            content: None, content_blocks: None,
-            tool_call_id: call_id, tool_name, tool_args,
-            tool_result: Some(result), is_error,
-            turn: Some(*current_turn), step: Some(1),
-            duration_ms: None, ttft_ms: None,
-            input_tokens: None, output_tokens: None, reasoning_tokens: None,
-            cache_read_tokens: None, cache_write_tokens: None,
-            model: None, provider: Some("claude".to_string()),
+            content: None,
+            content_blocks: None,
+            tool_call_id: call_id,
+            tool_name,
+            tool_args,
+            tool_result: Some(result),
+            is_error,
+            turn: Some(*current_turn),
+            step: Some(1),
+            duration_ms: None,
+            ttft_ms: None,
+            input_tokens: None,
+            output_tokens: None,
+            reasoning_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            model: None,
+            provider: Some("claude".to_string()),
         });
     }
 
@@ -262,16 +318,24 @@ fn push_user_events(
         *seq += 1;
         let content = user_texts.join("\n");
         events.push(TrajectoryEvent {
-            seq: *seq, ts,
+            seq: *seq,
+            ts,
             event_type: "user-message".to_string(),
             role: Some("user".to_string()),
             content: Some(content.clone()),
             content_blocks: Some(extract_content_blocks(message)),
-            tool_call_id: None, tool_name: None, tool_args: None, tool_result: None, is_error: None,
-            turn: Some(*current_turn), step: Some(0),
-            duration_ms: None, ttft_ms: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_args: None,
+            tool_result: None,
+            is_error: None,
+            turn: Some(*current_turn),
+            step: Some(0),
+            duration_ms: None,
+            ttft_ms: None,
             input_tokens: json["usage"]["input"].as_i64(),
-            output_tokens: None, reasoning_tokens: None,
+            output_tokens: None,
+            reasoning_tokens: None,
             cache_read_tokens: json["usage"]["cache_read_input_tokens"].as_i64(),
             cache_write_tokens: json["usage"]["cache_creation_input_tokens"].as_i64(),
             model: json["model"].as_str().map(|s| s.to_string()),
@@ -328,17 +392,28 @@ fn push_assistant_events(
                 }
 
                 events.push(TrajectoryEvent {
-                    seq: *seq, ts,
+                    seq: *seq,
+                    ts,
                     event_type: "tool-call".to_string(),
                     role: Some("assistant".to_string()),
-                    content: None, content_blocks: None,
-                    tool_call_id: call_id, tool_name, tool_args,
-                    tool_result: None, is_error: None,
-                    turn: Some(*current_turn), step: Some(*current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens: None, output_tokens: None, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model: None, provider: Some("claude".to_string()),
+                    content: None,
+                    content_blocks: None,
+                    tool_call_id: call_id,
+                    tool_name,
+                    tool_args,
+                    tool_result: None,
+                    is_error: None,
+                    turn: Some(*current_turn),
+                    step: Some(*current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model: None,
+                    provider: Some("claude".to_string()),
                 });
             } else {
                 let text = item["text"]
@@ -375,16 +450,24 @@ fn push_assistant_events(
             .or_else(|| json["usage"]["reasoning"].as_i64());
 
         events.push(TrajectoryEvent {
-            seq: *seq, ts,
+            seq: *seq,
+            ts,
             event_type: "assistant-message".to_string(),
             role: Some("assistant".to_string()),
             content: Some(content.clone()),
             content_blocks: Some(extract_content_blocks(message)),
-            tool_call_id: None, tool_name: None, tool_args: None, tool_result: None, is_error: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_args: None,
+            tool_result: None,
+            is_error: None,
             turn: Some(*current_turn),
             step: Some(if saw_tool_use { 1 } else { assistant_step }),
-            duration_ms: None, ttft_ms: None,
-            input_tokens, output_tokens, reasoning_tokens,
+            duration_ms: None,
+            ttft_ms: None,
+            input_tokens,
+            output_tokens,
+            reasoning_tokens,
             cache_read_tokens: json["usage"]["cache_read_input_tokens"].as_i64(),
             cache_write_tokens: json["usage"]["cache_creation_input_tokens"].as_i64(),
             model,
@@ -426,9 +509,7 @@ fn extract_text(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(items) => items
             .iter()
-            .filter_map(|item| {
-                item["text"].as_str().map(|s| s.to_string())
-            })
+            .filter_map(|item| item["text"].as_str().map(|s| s.to_string()))
             .collect::<Vec<_>>()
             .join("\n"),
         _ => String::new(),
@@ -442,7 +523,10 @@ fn extract_content_blocks(msg: &Value) -> Vec<ContentBlock> {
         blocks.push(ContentBlock {
             block_type: "text".to_string(),
             text: Some(text.to_string()),
-            tool_call_id: None, tool_name: None, tool_args: None, image_src: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_args: None,
+            image_src: None,
         });
         return blocks;
     }
@@ -450,51 +534,89 @@ fn extract_content_blocks(msg: &Value) -> Vec<ContentBlock> {
     if let Some(arr) = msg.as_array() {
         for item in arr {
             let block_type = item["type"].as_str().unwrap_or("text").to_string();
-            let text = item["text"].as_str()
+            let text = item["text"]
+                .as_str()
                 .or_else(|| item["content"].as_str())
                 .map(|s| s.to_string());
-            let tool_call_id = item["id"].as_str()
+            let tool_call_id = item["id"]
+                .as_str()
                 .or_else(|| item["tool_call_id"].as_str())
                 .map(|s| s.to_string());
-            let tool_name = item["name"].as_str()
+            let tool_name = item["name"]
+                .as_str()
                 .or_else(|| item["tool_name"].as_str())
                 .map(|s| s.to_string());
-            let tool_args = item["input"].as_object()
+            let tool_args = item["input"]
+                .as_object()
                 .map(|obj| serde_json::to_string(obj).unwrap_or_default())
                 .or_else(|| item["tool_args"].as_str().map(|s| s.to_string()));
-            let image_src = item["source"]["url"].as_str()
+            let image_src = item["source"]["url"]
+                .as_str()
                 .or_else(|| item["source"]["path"].as_str())
                 .or_else(|| item["image_url"].as_str())
                 .map(|s| s.to_string());
 
             blocks.push(ContentBlock {
-                block_type, text, tool_call_id, tool_name, tool_args, image_src,
+                block_type,
+                text,
+                tool_call_id,
+                tool_name,
+                tool_args,
+                image_src,
             });
         }
         return blocks;
     }
 
     if let Some(obj) = msg.as_object() {
-        let block_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("text").to_string();
-        let text = obj.get("text").and_then(|v| v.as_str())
+        let block_type = obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text")
+            .to_string();
+        let text = obj
+            .get("text")
+            .and_then(|v| v.as_str())
             .or_else(|| obj.get("content").and_then(|v| v.as_str()))
             .map(|s| s.to_string());
-        let tool_call_id = obj.get("id").and_then(|v| v.as_str())
+        let tool_call_id = obj
+            .get("id")
+            .and_then(|v| v.as_str())
             .or_else(|| obj.get("tool_call_id").and_then(|v| v.as_str()))
             .map(|s| s.to_string());
-        let tool_name = obj.get("name").and_then(|v| v.as_str())
+        let tool_name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
             .or_else(|| obj.get("tool_name").and_then(|v| v.as_str()))
             .map(|s| s.to_string());
-        let tool_args = obj.get("input").and_then(|v| v.as_object())
+        let tool_args = obj
+            .get("input")
+            .and_then(|v| v.as_object())
             .map(|obj| serde_json::to_string(obj).unwrap_or_default())
-            .or_else(|| obj.get("tool_args").and_then(|v| v.as_str()).map(|s| s.to_string()));
-        let image_src = obj.get("source").and_then(|v| v.get("url")).and_then(|v| v.as_str())
-            .or_else(|| obj.get("source").and_then(|v| v.get("path")).and_then(|v| v.as_str()))
+            .or_else(|| {
+                obj.get("tool_args")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
+        let image_src = obj
+            .get("source")
+            .and_then(|v| v.get("url"))
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                obj.get("source")
+                    .and_then(|v| v.get("path"))
+                    .and_then(|v| v.as_str())
+            })
             .or_else(|| obj.get("image_url").and_then(|v| v.as_str()))
             .map(|s| s.to_string());
 
         blocks.push(ContentBlock {
-            block_type, text, tool_call_id, tool_name, tool_args, image_src,
+            block_type,
+            text,
+            tool_call_id,
+            tool_name,
+            tool_args,
+            image_src,
         });
     }
 
@@ -550,7 +672,11 @@ mod tests {
         assert_eq!(events[2].event_type, "assistant-message");
         assert_eq!(events[3].event_type, "tool-result");
         assert_eq!(events[1].tool_name.as_deref(), Some("Bash"));
-        assert!(events[3].tool_result.as_deref().unwrap().contains("file1.txt"));
+        assert!(events[3]
+            .tool_result
+            .as_deref()
+            .unwrap()
+            .contains("file1.txt"));
     }
 
     #[test]
@@ -594,7 +720,10 @@ mod tests {
         let (_, events) = parse_trajectory(&path).unwrap();
         assert_eq!(events.len(), 4);
         for i in 1..events.len() {
-            assert!(events[i].ts >= events[i-1].ts, "events should be chronological");
+            assert!(
+                events[i].ts >= events[i - 1].ts,
+                "events should be chronological"
+            );
         }
         // Two turns
         assert_eq!(events[0].turn, Some(1));
@@ -605,7 +734,11 @@ mod tests {
     fn parse_empty_session_returns_no_events() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
-        std::fs::write(&path, "{\"sessionId\":\"sess-empty\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n").unwrap();
+        std::fs::write(
+            &path,
+            "{\"sessionId\":\"sess-empty\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+        )
+        .unwrap();
 
         let (sid, events) = parse_trajectory(&path).unwrap();
         assert_eq!(sid, "sess-empty");

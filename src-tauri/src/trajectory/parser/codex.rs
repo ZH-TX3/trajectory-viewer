@@ -13,8 +13,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::trajectory::{ContentBlock, TrajectoryEvent};
 use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms};
+use crate::trajectory::{ContentBlock, TrajectoryEvent};
 
 /// Parse a Codex JSONL session file into trajectory events.
 pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), String> {
@@ -34,8 +34,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
             continue;
         }
 
-        let json: Value = serde_json::from_str(&trimmed)
-            .map_err(|e| format!("Invalid JSON: {e}"))?;
+        let json: Value =
+            serde_json::from_str(&trimmed).map_err(|e| format!("Invalid JSON: {e}"))?;
 
         let ts = parse_timestamp_to_ms(&json["timestamp"]).unwrap_or(0);
 
@@ -98,20 +98,34 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
 
                 let input_tokens = payload["usage"]["input"].as_i64();
                 let output_tokens = payload["usage"]["output"].as_i64();
-                let model = payload.get("model").and_then(Value::as_str).map(|s| s.to_string());
+                let model = payload
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string());
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: event_type.to_string(),
                     role: Some(role),
                     content: Some(content),
                     content_blocks: Some(content_blocks),
-                    tool_call_id: None, tool_name: None, tool_args: None, tool_result: None, is_error: None,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens, output_tokens, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model, provider: Some("codex".to_string()),
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_args: None,
+                    tool_result: None,
+                    is_error: None,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model,
+                    provider: Some("codex".to_string()),
                 });
             }
 
@@ -121,11 +135,13 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     current_step = 1;
                 }
 
-                let name = payload.get("name")
+                let name = payload
+                    .get("name")
                     .and_then(Value::as_str)
                     .map(|s| s.to_string())
                     .unwrap_or_default();
-                let call_id = payload.get("call_id")
+                let call_id = payload
+                    .get("call_id")
                     .and_then(Value::as_str)
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| format!("fc_{seq}"));
@@ -137,23 +153,35 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                 );
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: "tool-call".to_string(),
                     role: Some("assistant".to_string()),
-                    content: None, content_blocks: None,
-                    tool_call_id: Some(call_id), tool_name: Some(name), tool_args: arguments,
-                    tool_result: None, is_error: None,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens: None, output_tokens: None, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model: None, provider: Some("codex".to_string()),
+                    content: None,
+                    content_blocks: None,
+                    tool_call_id: Some(call_id),
+                    tool_name: Some(name),
+                    tool_args: arguments,
+                    tool_result: None,
+                    is_error: None,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model: None,
+                    provider: Some("codex".to_string()),
                 });
             }
 
             "function_call_output" => {
                 seq += 1;
-                let call_id = payload.get("call_id")
+                let call_id = payload
+                    .get("call_id")
                     .and_then(Value::as_str)
                     .map(|s| s.to_string())
                     .unwrap_or_default();
@@ -171,17 +199,28 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     .unwrap_or((None, None));
 
                 events.push(TrajectoryEvent {
-                    seq, ts,
+                    seq,
+                    ts,
                     event_type: "tool-result".to_string(),
                     role: Some("tool".to_string()),
-                    content: None, content_blocks: None,
-                    tool_call_id: Some(call_id), tool_name, tool_args,
-                    tool_result: Some(output), is_error,
-                    turn: Some(current_turn), step: Some(current_step),
-                    duration_ms: None, ttft_ms: None,
-                    input_tokens: None, output_tokens: None, reasoning_tokens: None,
-                    cache_read_tokens: None, cache_write_tokens: None,
-                    model: None, provider: Some("codex".to_string()),
+                    content: None,
+                    content_blocks: None,
+                    tool_call_id: Some(call_id),
+                    tool_name,
+                    tool_args,
+                    tool_result: Some(output),
+                    is_error,
+                    turn: Some(current_turn),
+                    step: Some(current_step),
+                    duration_ms: None,
+                    ttft_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    reasoning_tokens: None,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    model: None,
+                    provider: Some("codex".to_string()),
                 });
             }
 
@@ -237,26 +276,37 @@ fn extract_codex_content_blocks(payload: &Value) -> Vec<ContentBlock> {
             blocks.push(ContentBlock {
                 block_type: "text".to_string(),
                 text: Some(text.clone()),
-                tool_call_id: None, tool_name: None, tool_args: None, image_src: None,
+                tool_call_id: None,
+                tool_name: None,
+                tool_args: None,
+                image_src: None,
             });
         }
         Value::Array(arr) => {
             for item in arr {
                 let block_type = item["type"].as_str().unwrap_or("text").to_string();
                 let text = item["text"].as_str().map(|s| s.to_string());
-                let tool_call_id = item["id"].as_str()
+                let tool_call_id = item["id"]
+                    .as_str()
                     .or_else(|| item["tool_call_id"].as_str())
                     .map(|s| s.to_string());
                 let tool_name = item["name"].as_str().map(|s| s.to_string());
-                let tool_args = item["input"].as_object()
+                let tool_args = item["input"]
+                    .as_object()
                     .map(|obj| serde_json::to_string(obj).unwrap_or_default());
-                let image_src = item["source"]["url"].as_str()
+                let image_src = item["source"]["url"]
+                    .as_str()
                     .or_else(|| item["source"]["path"].as_str())
                     .or_else(|| item["image_url"].as_str())
                     .map(|s| s.to_string());
 
                 blocks.push(ContentBlock {
-                    block_type, text, tool_call_id, tool_name, tool_args, image_src,
+                    block_type,
+                    text,
+                    tool_call_id,
+                    tool_name,
+                    tool_args,
+                    image_src,
                 });
             }
         }
@@ -313,7 +363,11 @@ mod tests {
         assert_eq!(events[2].event_type, "tool-result");
         assert_eq!(events[3].event_type, "assistant-message");
         assert_eq!(events[1].tool_name.as_deref(), Some("shell"));
-        assert!(events[2].tool_result.as_deref().unwrap().contains("file1.txt"));
+        assert!(events[2]
+            .tool_result
+            .as_deref()
+            .unwrap()
+            .contains("file1.txt"));
     }
 
     #[test]

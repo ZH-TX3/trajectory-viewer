@@ -2,8 +2,8 @@
 //
 // Scans Claude Code and Codex session directories, loads messages.
 
-use std::path::{Path, PathBuf};
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,7 +102,11 @@ fn claude_projects_dir() -> Option<PathBuf> {
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
     let dir = PathBuf::from(home).join(".claude").join("projects");
-    if dir.exists() { Some(dir) } else { None }
+    if dir.exists() {
+        Some(dir)
+    } else {
+        None
+    }
 }
 
 fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
@@ -124,17 +128,27 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
     for line in &head {
         let value: serde_json::Value = serde_json::from_str(line).ok()?;
         if session_id.is_none() {
-            session_id = value.get("sessionId").and_then(|v| v.as_str()).map(|s| s.to_string());
+            session_id = value
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
         }
         if project_dir.is_none() {
-            project_dir = value.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+            project_dir = value
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
         }
         if created_at.is_none() {
             created_at = value.get("timestamp").and_then(parse_timestamp_to_ms);
         }
         if first_user_message.is_none() {
             let is_user = value.get("type").and_then(|v| v.as_str()) == Some("user")
-                || value.get("message").and_then(|m| m.get("role")).and_then(|v| v.as_str()) == Some("user");
+                || value
+                    .get("message")
+                    .and_then(|m| m.get("role"))
+                    .and_then(|v| v.as_str())
+                    == Some("user");
             if is_user {
                 if let Some(message) = value.get("message") {
                     let text = extract_text(message);
@@ -148,7 +162,11 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
                 }
             }
         }
-        if session_id.is_some() && project_dir.is_some() && created_at.is_some() && first_user_message.is_some() {
+        if session_id.is_some()
+            && project_dir.is_some()
+            && created_at.is_some()
+            && first_user_message.is_some()
+        {
             break;
         }
     }
@@ -162,13 +180,19 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
         if last_active_at.is_none() {
             last_active_at = value.get("timestamp").and_then(parse_timestamp_to_ms);
         }
-        if custom_title.is_none() && value.get("type").and_then(|v| v.as_str()) == Some("custom-title") {
-            custom_title = value.get("customTitle").and_then(|v| v.as_str())
+        if custom_title.is_none()
+            && value.get("type").and_then(|v| v.as_str()) == Some("custom-title")
+        {
+            custom_title = value
+                .get("customTitle")
+                .and_then(|v| v.as_str())
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
         }
         if summary.is_none() {
-            if value.get("isMeta").and_then(|v| v.as_bool()) == Some(true) { continue; }
+            if value.get("isMeta").and_then(|v| v.as_bool()) == Some(true) {
+                continue;
+            }
             if let Some(message) = value.get("message") {
                 let text = extract_text(message);
                 if !text.trim().is_empty() {
@@ -182,14 +206,21 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
     }
 
     let session_id = session_id.or_else(|| {
-        path.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string())
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
     })?;
 
     let title = custom_title
         .or_else(|| first_user_message.map(|t| truncate(&t, 80)))
         .or_else(|| {
-            project_dir.as_deref()
-                .and_then(|d| d.trim_end_matches(['/', '\\']).split(['/', '\\']).next_back())
+            project_dir
+                .as_deref()
+                .and_then(|d| {
+                    d.trim_end_matches(['/', '\\'])
+                        .split(['/', '\\'])
+                        .next_back()
+                })
                 .filter(|s| !s.is_empty())
                 .map(|v| v.to_string())
         });
@@ -225,30 +256,42 @@ fn load_claude_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
             Err(_) => continue,
         };
 
-        if value.get("isMeta").and_then(|v| v.as_bool()) == Some(true) { continue; }
+        if value.get("isMeta").and_then(|v| v.as_bool()) == Some(true) {
+            continue;
+        }
 
         let message = match value.get("message") {
             Some(m) => m,
             None => continue,
         };
 
-        let mut role = message.get("role").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        let mut role = message
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
 
         // Reclassify tool_result-only user messages as "tool" role
         if role == "user" {
             if let Some(items) = message.get("content").and_then(|v| v.as_array()) {
-                if !items.is_empty() && items.iter().all(|item| {
-                    item.get("type").and_then(|v| v.as_str()) == Some("tool_result")
-                }) {
+                if !items.is_empty()
+                    && items.iter().all(|item| {
+                        item.get("type").and_then(|v| v.as_str()) == Some("tool_result")
+                    })
+                {
                     role = "tool".to_string();
                 }
             }
         }
 
         let content = extract_text(message);
-        if content.trim().is_empty() { continue; }
+        if content.trim().is_empty() {
+            continue;
+        }
 
-        let ts = value.get("timestamp").and_then(crate::trajectory::utils::parse_timestamp_to_ms);
+        let ts = value
+            .get("timestamp")
+            .and_then(crate::trajectory::utils::parse_timestamp_to_ms);
 
         messages.push(SessionMessage { role, content, ts });
     }
@@ -263,7 +306,11 @@ fn codex_sessions_dir() -> Option<PathBuf> {
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
     let dir = PathBuf::from(home).join(".codex").join("sessions");
-    if dir.exists() { Some(dir) } else { None }
+    if dir.exists() {
+        Some(dir)
+    } else {
+        None
+    }
 }
 
 fn parse_codex_session(path: &Path) -> Option<SessionMeta> {
@@ -284,30 +331,46 @@ fn parse_codex_session(path: &Path) -> Option<SessionMeta> {
         if value.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
             if let Some(payload) = value.get("payload") {
                 if session_id.is_none() {
-                    session_id = payload.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    session_id = payload
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                 }
                 if project_dir.is_none() {
-                    project_dir = payload.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    project_dir = payload
+                        .get("cwd")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                 }
                 if let Some(ts) = payload.get("timestamp").and_then(parse_timestamp_to_ms) {
                     created_at.get_or_insert(ts);
                 }
             }
         }
-        if first_user_message.is_none() && value.get("type").and_then(|v| v.as_str()) == Some("response_item") {
+        if first_user_message.is_none()
+            && value.get("type").and_then(|v| v.as_str()) == Some("response_item")
+        {
             if let Some(payload) = value.get("payload") {
                 if payload.get("type").and_then(|v| v.as_str()) == Some("message")
                     && payload.get("role").and_then(|v| v.as_str()) == Some("user")
                 {
-                    let text = extract_text(payload.get("content").unwrap_or(&serde_json::Value::Null));
+                    let text =
+                        extract_text(payload.get("content").unwrap_or(&serde_json::Value::Null));
                     let trimmed = text.trim();
-                    if !trimmed.is_empty() && !trimmed.starts_with("# AGENTS.md") && !trimmed.starts_with("<environment_context>") {
+                    if !trimmed.is_empty()
+                        && !trimmed.starts_with("# AGENTS.md")
+                        && !trimmed.starts_with("<environment_context>")
+                    {
                         first_user_message = Some(trimmed.to_string());
                     }
                 }
             }
         }
-        if session_id.is_some() && project_dir.is_some() && created_at.is_some() && first_user_message.is_some() {
+        if session_id.is_some()
+            && project_dir.is_some()
+            && created_at.is_some()
+            && first_user_message.is_some()
+        {
             break;
         }
     }
@@ -320,37 +383,46 @@ fn parse_codex_session(path: &Path) -> Option<SessionMeta> {
         if last_active_at.is_none() {
             last_active_at = value.get("timestamp").and_then(parse_timestamp_to_ms);
         }
-        if summary.is_none() && value.get("type").and_then(|v| v.as_str()) == Some("response_item") {
+        if summary.is_none() && value.get("type").and_then(|v| v.as_str()) == Some("response_item")
+        {
             if let Some(payload) = value.get("payload") {
                 if payload.get("type").and_then(|v| v.as_str()) == Some("message") {
-                    let text = extract_text(payload.get("content").unwrap_or(&serde_json::Value::Null));
+                    let text =
+                        extract_text(payload.get("content").unwrap_or(&serde_json::Value::Null));
                     if !text.trim().is_empty() {
                         summary = Some(text);
                     }
                 }
             }
         }
-        if last_active_at.is_some() && summary.is_some() { break; }
+        if last_active_at.is_some() && summary.is_some() {
+            break;
+        }
     }
 
     let session_id = session_id.or_else(|| {
-        path.file_name().and_then(|s| s.to_str())
-            .and_then(|name| {
-                // Extract UUID from filename
-                use regex::Regex;
-                let re = Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").ok()?;
-                re.find(name).map(|m| m.as_str().to_string())
-            })
+        path.file_name().and_then(|s| s.to_str()).and_then(|name| {
+            // Extract UUID from filename
+            use regex::Regex;
+            let re = Regex::new(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            )
+            .ok()?;
+            re.find(name).map(|m| m.as_str().to_string())
+        })
     })?;
 
-    let title = first_user_message
-        .map(|t| truncate(&t, 80))
-        .or_else(|| {
-            project_dir.as_deref()
-                .and_then(|d| d.trim_end_matches(['/', '\\']).split(['/', '\\']).next_back())
-                .filter(|s| !s.is_empty())
-                .map(|v| v.to_string())
-        });
+    let title = first_user_message.map(|t| truncate(&t, 80)).or_else(|| {
+        project_dir
+            .as_deref()
+            .and_then(|d| {
+                d.trim_end_matches(['/', '\\'])
+                    .split(['/', '\\'])
+                    .next_back()
+            })
+            .filter(|s| !s.is_empty())
+            .map(|v| v.to_string())
+    });
 
     let summary = summary.map(|text| truncate(&text, 160));
 
@@ -383,7 +455,9 @@ fn load_codex_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
             Err(_) => continue,
         };
 
-        if value.get("type").and_then(|v| v.as_str()) != Some("response_item") { continue; }
+        if value.get("type").and_then(|v| v.as_str()) != Some("response_item") {
+            continue;
+        }
 
         let payload = match value.get("payload") {
             Some(p) => p,
@@ -394,24 +468,40 @@ fn load_codex_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
 
         let (role, content) = match payload_type {
             "message" => {
-                let role = payload.get("role").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                let content = extract_text(payload.get("content").unwrap_or(&serde_json::Value::Null));
+                let role = payload
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let content =
+                    extract_text(payload.get("content").unwrap_or(&serde_json::Value::Null));
                 (role, content)
             }
             "function_call" => {
-                let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let name = payload
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
                 ("assistant".to_string(), format!("[Tool: {name}]"))
             }
             "function_call_output" => {
-                let output = payload.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let output = payload
+                    .get("output")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 ("tool".to_string(), output)
             }
             _ => continue,
         };
 
-        if content.trim().is_empty() { continue; }
+        if content.trim().is_empty() {
+            continue;
+        }
 
-        let ts = value.get("timestamp").and_then(crate::trajectory::utils::parse_timestamp_to_ms);
+        let ts = value
+            .get("timestamp")
+            .and_then(crate::trajectory::utils::parse_timestamp_to_ms);
 
         messages.push(SessionMessage { role, content, ts });
     }
@@ -427,7 +517,7 @@ fn claude_project_group(path: &Path) -> Option<String> {
     path.parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
-        .map(|s| decode_project_name(s))
+        .map(decode_project_name)
 }
 
 /// Extract the project group name for a Codex session.
@@ -449,7 +539,11 @@ fn dsh_sessions_dir() -> Option<PathBuf> {
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
     let dir = PathBuf::from(home).join(".dsh").join("sessions");
-    if dir.exists() { Some(dir) } else { None }
+    if dir.exists() {
+        Some(dir)
+    } else {
+        None
+    }
 }
 
 fn dsh_project_group(path: &Path) -> Option<String> {
@@ -500,7 +594,9 @@ fn parse_dsh_session(path: &Path) -> Option<SessionMeta> {
                     }
                 }
             }
-            if title.is_some() { break; }
+            if title.is_some() {
+                break;
+            }
         }
     }
 
@@ -519,7 +615,9 @@ fn parse_dsh_session(path: &Path) -> Option<SessionMeta> {
 }
 
 fn collect_zstd_files_recursive(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() { return; }
+    if !root.exists() {
+        return;
+    }
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(_) => return,
@@ -549,7 +647,9 @@ fn decode_project_name(name: &str) -> String {
 }
 
 fn collect_jsonl_files_recursive(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() { return; }
+    if !root.exists() {
+        return;
+    }
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(_) => return,
@@ -567,28 +667,38 @@ fn collect_jsonl_files_recursive(root: &Path, files: &mut Vec<PathBuf>) {
 fn extract_text(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(items) => items.iter()
+        serde_json::Value::Array(items) => items
+            .iter()
             .filter_map(|item| {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if item_type == "tool_use" {
-                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
                     Some(format!("[Tool: {name}]"))
                 } else if item_type == "tool_result" {
                     item.get("content").map(extract_text)
                 } else {
-                    item.get("text").and_then(|v| v.as_str()).map(|s| s.to_string())
-                        .or_else(|| item.get("content").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    item.get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            item.get("content")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
                 }
             })
             .filter(|t| !t.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n"),
-        serde_json::Value::Object(map) => {
-            map.get("text").and_then(|v| v.as_str())
-                .or_else(|| map.get("content").and_then(|v| v.as_str()))
-                .unwrap_or_default()
-                .to_string()
-        }
+        serde_json::Value::Object(map) => map
+            .get("text")
+            .and_then(|v| v.as_str())
+            .or_else(|| map.get("content").and_then(|v| v.as_str()))
+            .unwrap_or_default()
+            .to_string(),
         _ => String::new(),
     }
 }

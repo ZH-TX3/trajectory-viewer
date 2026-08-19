@@ -1,7 +1,7 @@
 // ── Tauri Commands ───────────────────────────────────────────────────────
 
-use crate::trajectory;
 use crate::session_manager;
+use crate::trajectory;
 
 #[tauri::command]
 pub fn parse_trajectory_file(source_path: String) -> Result<trajectory::TrajectoryData, String> {

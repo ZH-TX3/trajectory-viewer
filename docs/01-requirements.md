@@ -8,6 +8,8 @@
 
 ### 目标
 
+- 左侧会话浏览器：自动扫描 Claude Code / Codex / DSH 会话，按项目目录层级分组，支持 Provider 过滤
+- 右侧双标签页：Messages（对话记录）与 Trajectory（轨迹视图）切换
 - 支持拖入/选择 JSONL 文件，自动识别 provider 类型
 - 解析为结构化时间线，展示完整的交互轮次
 - 提供搜索、折叠、时间线范围选择、详情检视等功能
@@ -97,19 +99,22 @@ interface ContentBlock {
 
 ### 3.1 Provider 解析器
 
-| Provider | 解析方式 | 优先级 |
-|----------|----------|--------|
-| Claude Code | JSONL 逐行解析 `type` 字段：`user` / `assistant` / `tool_call` / `tool_result` / `tool_use` | P0 |
-| Codex | JSONL 解析 `type: "response_item"`，处理 `payload.type`：`message` / `function_call` / `function_call_output` | P0 |
-| Gemini | TBD | P1 |
-| OpenCode | TBD（SQLite 存储） | P1 |
-| OpenClaw | TBD | P1 |
-| Hermes | TBD（SQLite 存储） | P1 |
+| Provider | 解析方式 | 状态 |
+|----------|----------|------|
+| Claude Code | JSONL 逐行解析 `type` 字段：`user` / `assistant` / `tool_call` / `tool_result` / `tool_use` | ✅ 完成 |
+| Codex | JSONL 解析 `type: "response_item"`，处理 `payload.type`：`message` / `function_call` / `function_call_output` | ✅ 完成 |
+| DSH | Zstd 压缩 JSONL，解析 `user/message` / `assistant/message` / `tool/call` / `tool/result` 事件 | ✅ 完成 |
+| Gemini | TBD | ❌ 未实现 |
+| OpenCode | TBD（SQLite 存储） | ❌ 未实现 |
+| OpenClaw | TBD | ❌ 未实现 |
+| Hermes | TBD（SQLite 存储） | ❌ 未实现 |
 
 ### 3.2 自动检测（Provider Detection）
 
-读取 JSONL 前 200 行，根据特征识别：
+读取 JSONL 前 200 行，根据特征识别（zstd 文件则先解压头部）：
 
+- 文件扩展名为 `.zstd` / `.zst` → 尝试解压头部判断 DSH
+- 出现 `type: "session"` / `"user/message"` / `"assistant/message"` → DSH
 - 出现 `sessionId` 字段 → Claude
 - 出现 `message.role` 字段 → Claude
 - 出现 `type: "user"` / `"assistant"` / `"tool_call"` / `"tool_result"` → Claude
@@ -284,7 +289,7 @@ App
 JSONL 文件
   ↓
 Rust 解析器（按 provider 分发）
-  ↓ claude.rs / codex.rs
+  ↓ claude.rs / codex.rs / dsh.rs
 TrajectoryData
   ↓ Tauri invoke
 前端数据获取
@@ -320,30 +325,37 @@ trajectory-viewer/
 │   └── src/
 │       ├── main.rs
 │       ├── lib.rs                    ← 应用入口 + 命令注册
-│       ├── trajectory/
-│       │   ├── mod.rs                ← 数据模型 + 自动检测
-│       │   ├── parser/
-│       │   │   ├── mod.rs            ← 解析器分发
-│       │   │   ├── claude.rs         ← Claude Code 解析器
-│       │   │   └── codex.rs          ← Codex 解析器
-│       │   └── utils.rs              ← 共享工具函数
-│       └── commands.rs               ← Tauri 命令
+│       ├── commands.rs               ← Tauri 命令
+│       ├── session_manager.rs        ← 会话扫描 + 消息加载（Claude/Codex/DSH）
+│       └── trajectory/
+│           ├── mod.rs                ← 数据模型 + 自动检测 + 解析分发
+│           ├── utils.rs              ← 共享工具函数
+│           └── parser/
+│               ├── mod.rs            ← 解析器模块声明
+│               ├── claude.rs         ← Claude Code 解析器
+│               ├── codex.rs          ← Codex 解析器
+│               └── dsh.rs            ← DSH zstd 解析器
 ├── src/
 │   ├── main.tsx                      ← 入口
-│   ├── App.tsx                       ← 根组件（文件选择 + 切换）
+│   ├── App.tsx                       ← 根组件（会话浏览 ⇄ 独立文件切换）
 │   ├── types.ts                      ← 类型定义
 │   ├── api.ts                        ← Tauri invoke 封装
+│   ├── styles.css                    ← Tailwind + CSS 变量 + timeline-focus 置灰
+│   ├── lib/utils.ts                  ← cn() 类名合并
 │   ├── components/
-│   │   ├── FileDropZone.tsx           ← 文件拖入/选择
-│   │   ├── TrajectoryView.tsx         ← 主容器
-│   │   ├── TrajectoryToolbar.tsx      ← 工具栏
-│   │   ├── TrajectoryTimeline.tsx     ← 时间线
-│   │   ├── TrajectoryTable.tsx        ← 记录表（虚拟滚动）
-│   │   ├── TrajectoryCell.tsx         ← 单行记录
-│   │   └── TrajectoryDetail.tsx       ← 详情面板
+│   │   ├── SessionBrowser.tsx        ← 主视图：会话列表 + 双标签页
+│   │   ├── FileDropZone.tsx          ← 文件拖入/选择
+│   │   ├── TrajectoryView.tsx        ← 轨迹编排器（状态管理 + focus 计算）
+│   │   ├── TrajectoryToolbar.tsx     ← 工具栏
+│   │   ├── TrajectoryTimeline.tsx    ← 三车道时间线（拖拽范围选择）
+│   │   ├── TrajectoryTable.tsx       ← 记录表（虚拟滚动 + 焦点置灰）
+│   │   ├── TrajectoryCell.tsx        ← 单行记录
+│   │   └── TrajectoryDetail.tsx      ← 详情面板（可拖拽宽度）
 │   └── utils/
-│       ├── layout.ts                  ← 布局算法
-│       └── format.ts                  ← 格式化工具
+│       ├── layout.ts                 ← 布局算法 + 时间轴模型 + focus 计算
+│       └── format.ts                 ← 格式化工具
+├── docs/
+│   └── 01-requirements.md           ← 本文档
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
@@ -365,25 +377,34 @@ trajectory-viewer/
 ### Phase 2: Rust 后端解析器
 - [x] 实现 Claude Code 解析器
 - [x] 实现 Codex 解析器
+- [x] 实现 DSH（zstd）解析器
 - [x] 实现 Provider 自动检测
 - [x] 实现 Tauri 命令
+
+### Phase 2.5: 会话系统
+- [x] 实现会话扫描（Claude/Codex/DSH 默认路径）
+- [x] 实现消息加载（Messages 标签页）
+- [x] 实现项目目录层级分组 + Provider 过滤
 
 ### Phase 3: 前端布局算法
 - [x] 实现 `deriveTrajectoryLayout()`
 - [x] 实现格式化工具函数
+- [x] 实现 `deriveTrajectoryTimeline()`（统一时间轴模型）
+- [x] 实现 `trajectoryTimelineFocusIndexes()`（时间范围 → 记录索引）
 
 ### Phase 4: UI 组件
 - [x] 实现 FileDropZone
+- [x] 实现 SessionBrowser（会话列表 + 双标签页）
 - [x] 实现 TrajectoryView
 - [x] 实现 TrajectoryToolbar
-- [x] 实现 TrajectoryTimeline
-- [x] 实现 TrajectoryTable（虚拟滚动）
+- [x] 实现 TrajectoryTimeline（拖拽范围选择，DSH 参考实现）
+- [x] 实现 TrajectoryTable（虚拟滚动 + focus 置灰）
 - [x] 实现 TrajectoryCell
-- [x] 实现 TrajectoryDetail
+- [x] 实现 TrajectoryDetail（可拖拽宽度 + 蓝色高亮标签页）
 
 ### Phase 5: 集成测试
-- [x] Rust 单元测试
-- [x] 前端组件测试
+- [x] Rust 单元测试（12 个）
+- [ ] 前端组件测试
 - [x] 端到端验证
 
 ---

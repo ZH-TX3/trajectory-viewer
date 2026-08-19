@@ -77,3 +77,8 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.5);
 }
+
+/* Timeline range focus — dim rows outside the selected interval (DSH port) */
+tr[data-timeline-focus="outside"] {
+  opacity: 0.25;
+}

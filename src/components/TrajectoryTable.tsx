@@ -155,7 +155,13 @@ export function TrajectoryTable({
                                 onClick={() => handleRecordClick(entry.cell)}
                                 selected={selectedRecord?.index === entry.cell.index}
                                 searchMatch={searchMatchIndexes?.has(entry.cell.index)}
-                                timelineDimmed={timelineFocusIndexes != null && timelineFocusIndexes.size > 0 && timelineFocusIndexes.has(entry.cell.index) === false}
+                                timelineFocus={
+                                  timelineFocusIndexes === null || timelineFocusIndexes.size === 0
+                                    ? undefined
+                                    : timelineFocusIndexes.has(entry.cell.index)
+                                      ? 'inside'
+                                      : 'outside'
+                                }
                               />
                             ))}
                           </tbody>

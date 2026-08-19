@@ -393,3 +393,137 @@ export function trajectoryRecordId(cell: {
   if (cell.sourceSeq !== undefined) return `${cell.kind}\0seq\0${cell.sourceSeq}`;
   return `${cell.kind}\0index\0${cell.index}`;
 }
+
+// ── Timeline model (ported from DSH deriveTrajectoryTimeline) ─────────────
+//
+// The timeline is a stable three-lane projection of every visible record.
+// Each span carries its position in a shared coordinate space:
+//   - mode "sequence" → cell order (0..N)
+//   - mode "actual"   → wall-clock time (milliseconds)
+// The drag range emitted by the timeline lives in this SAME coordinate space,
+// so trajectoryTimelineFocusIndexes() can map it back to record indexes
+// without any drift between what is drawn and what is dimmed.
+
+export type TrajectoryTimelineMode = 'sequence' | 'actual';
+
+export interface TrajectorySpanModel {
+  start: number;
+  end: number;
+  index: number;
+  isError: boolean;
+  kind: TrajectoryCellKind;
+  lane: number;
+  label: string;
+}
+
+export interface TrajectoryTimelineModel {
+  start: number;
+  end: number;
+  spans: TrajectorySpanModel[];
+  turnBoundaries: { turn: number; time: number }[];
+}
+
+function laneFor(kind: TrajectoryCellKind): number {
+  if (kind === 'tool' || kind === 'subtool') return 2;
+  if (kind === 'message' || kind === 'compacted') return 1;
+  return 0;
+}
+
+function cellRange(cell: TrajectoryCellProps):
+  { start: number; end: number } | null {
+  const startedAt = cell.startedAt;
+  if (startedAt === null || startedAt === undefined || !Number.isFinite(startedAt)) return null;
+  const durationMs =
+    cell.timeSeconds !== null && cell.timeSeconds !== undefined && Number.isFinite(cell.timeSeconds)
+      ? Math.max(0, cell.timeSeconds * 1000)
+      : 0;
+  return { start: startedAt, end: startedAt + durationMs };
+}
+
+/** Build the timeline model for modes: sequence layout or actual recorded time. */
+export function deriveTrajectoryTimeline(
+  turns: readonly TrajectoryTurnModel[],
+  mode: TrajectoryTimelineMode = 'sequence',
+): TrajectoryTimelineModel | null {
+  if (mode === 'actual') {
+    const spans: TrajectorySpanModel[] = [];
+    const turnBoundaries: { turn: number; time: number }[] = [];
+    let hasSpans = false;
+
+    for (const turn of turns) {
+      const turnSpans = turn.groups.flatMap((group) =>
+        group.cells.flatMap((cell) => {
+          if (cell.requestOnly === true) return [];
+          const range = cellRange(cell);
+          return range === null
+            ? []
+            : [{
+                start: range.start,
+                end: range.end,
+                index: cell.index,
+                isError: cell.isError === true,
+                kind: cell.kind,
+                lane: laneFor(cell.kind),
+                label: cell.text,
+              }];
+        }),
+      );
+      if (turnSpans.length === 0) continue;
+      hasSpans = true;
+      if (turn.turn !== null) {
+        turnBoundaries.push({ turn: turn.turn, time: Math.min(...turnSpans.map((s) => s.start)) });
+      }
+      spans.push(...turnSpans);
+    }
+
+    if (!hasSpans) return null;
+    return {
+      start: Math.min(...spans.map((s) => s.start)),
+      end: Math.max(...spans.map((s) => s.end)),
+      spans,
+      turnBoundaries,
+    };
+  }
+
+  // "sequence" mode — layout every visible record at integer positions.
+  const spans: TrajectorySpanModel[] = [];
+  const turnBoundaries: { turn: number; time: number }[] = [];
+
+  for (const turn of turns) {
+    const cells = turn.groups.flatMap((group) => group.cells.filter((cell) => cell.requestOnly !== true));
+    if (cells.length === 0) continue;
+    if (turn.turn !== null) turnBoundaries.push({ turn: turn.turn, time: spans.length });
+    spans.push(
+      ...cells.map((cell, offset) => ({
+        start: spans.length + offset,
+        end: spans.length + offset + 1,
+        index: cell.index,
+        isError: cell.isError === true,
+        kind: cell.kind,
+        lane: laneFor(cell.kind),
+        label: cell.text,
+      })),
+    );
+  }
+
+  if (spans.length === 0) return null;
+  return { start: 0, end: spans.length, spans, turnBoundaries };
+}
+
+/**
+ * Identify records active at any point inside an inclusive selected interval.
+ * @returns Record indexes inside the focus interval (exact — spans overlapping the range).
+ */
+export function trajectoryTimelineFocusIndexes(
+  turns: readonly TrajectoryTurnModel[],
+  range: { start: number; end: number },
+  mode: TrajectoryTimelineMode = 'sequence',
+): Set<number> {
+  const model = deriveTrajectoryTimeline(turns, mode);
+  if (!model) return new Set();
+  return new Set(
+    model.spans
+      .filter((span) => span.start <= range.end && span.end >= range.start)
+      .map((span) => span.index),
+  );
+}

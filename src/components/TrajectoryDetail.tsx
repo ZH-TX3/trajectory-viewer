@@ -97,8 +97,8 @@ export function TrajectoryDetail({ cell, onClose, detailWidth, onWidthChange }: 
             className={cn(
               'px-3 py-1.5 text-[11px] font-medium transition-colors shrink-0',
               activeTab === tab.id
-                ? 'text-foreground border-b-2 border-primary'
-                : 'text-muted-foreground hover:text-foreground',
+                ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200 font-medium shadow-sm ring-1 ring-blue-300 dark:ring-blue-700 border-b-2 border-blue-500 dark:border-blue-400'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
             )}
           >
             {tab.label}

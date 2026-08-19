@@ -78,7 +78,8 @@ interface TrajectoryCellPropsExtra extends TrajectoryCellProps {
   onClick?: () => void;
   selected?: boolean;
   searchMatch?: boolean;
-  timelineDimmed?: boolean;
+  /** "inside" / "outside" when a timeline range is active (DSH data-timeline-focus) */
+  timelineFocus?: 'inside' | 'outside' | undefined;
 }
 
 export function TrajectoryCell({
@@ -94,7 +95,7 @@ export function TrajectoryCell({
   onClick,
   selected,
   searchMatch,
-  timelineDimmed,
+  timelineFocus,
 }: TrajectoryCellPropsExtra) {
   const label = KIND_LABEL[kind] ?? kind.toUpperCase();
   const icon = KIND_ICON[kind];
@@ -107,13 +108,13 @@ export function TrajectoryCell({
       data-turn-start={opensTurn ? '' : undefined}
       data-selected={selected ? '' : undefined}
       data-error={isError ? '' : undefined}
+      data-timeline-focus={timelineFocus}
       onClick={onClick}
       className={cn(
         'border-b border-border/40 transition-colors cursor-pointer',
         bgClass,
         selected && 'bg-blue-100 dark:bg-blue-800/40 ring-2 ring-blue-400/60 dark:ring-blue-500/60 ring-inset',
         searchMatch && 'bg-yellow-100 dark:bg-yellow-800/30',
-        timelineDimmed && 'opacity-25',
       )}
     >
       {/* Event column */}
@@ -159,4 +160,4 @@ export function TrajectoryCell({
       </td>
     </tr>
   );
-});
+}

@@ -6,8 +6,11 @@ import { useCallback, useMemo, useState } from 'react';
 import { TrajectoryToolbar } from './TrajectoryToolbar';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
 import { TrajectoryTable } from './TrajectoryTable';
-import { deriveTrajectoryLayout } from '../utils/layout';
-import type { TrajectoryTurnModel } from '../utils/layout';
+import {
+  deriveTrajectoryLayout,
+  trajectoryTimelineFocusIndexes,
+} from '../utils/layout';
+import type { TrajectoryTurnModel, TrajectoryTimelineMode } from '../utils/layout';
 import type { TrajectoryData } from '../types';
 
 interface TrajectoryViewProps {
@@ -52,23 +55,23 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
     return matches;
   }, [turns, searchQuery]);
 
-  // Timeline focus indexes
-  const timelineFocusIndexes = useMemo(() => {
-    if (!timelineRange) return null;
-    const focus = new Set<number>();
+  // The timeline projects every record into a shared coordinate space; the
+  // drag range lives in that space. Map it back to the exact record indexes.
+  const timelineMode: TrajectoryTimelineMode = actualDuration ? 'actual' : 'sequence';
+  const timelineFocusIndexes = useMemo(
+    () =>
+      timelineRange === null
+        ? null
+        : trajectoryTimelineFocusIndexes(turns, timelineRange, timelineMode),
+    [turns, timelineRange, timelineMode],
+  );
 
-    for (const turn of turns) {
-      for (const group of turn.groups) {
-        for (const cell of group.cells) {
-          if (cell.index >= timelineRange.start && cell.index <= timelineRange.end) {
-            focus.add(cell.index);
-          }
-        }
-      }
-    }
-
-    return focus;
-  }, [turns, timelineRange]);
+  const handleTimelineRangeChange = useCallback(
+    (range: { start: number; end: number } | null) => {
+      setTimelineRange(range);
+    },
+    [],
+  );
 
   // Collapse/expand handlers
   const allTurnsCollapsed = collapsedTurns.size > 0;
@@ -121,7 +124,9 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
   }, []);
 
   const handleToggleDuration = useCallback(() => {
+    // Switching the projection invalidates the current range selection.
     setActualDuration((prev) => !prev);
+    setTimelineRange(null);
   }, []);
 
   // Count turns and calls
@@ -158,9 +163,10 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
       {/* Timeline */}
       <TrajectoryTimeline
         turns={turns}
-        actualDuration={actualDuration}
+        mode={timelineMode}
+        range={timelineRange}
         searchMatchIndexes={searchMatchIndexes}
-        onRangeChange={setTimelineRange}
+        onRangeChange={handleTimelineRangeChange}
       />
 
       {/* Table */}

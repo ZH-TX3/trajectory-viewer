@@ -78,10 +78,10 @@ interface TrajectoryCellPropsExtra extends TrajectoryCellProps {
   onClick?: () => void;
   selected?: boolean;
   searchMatch?: boolean;
-  timelineFocus?: boolean;
+  timelineDimmed?: boolean;
 }
 
-export const TrajectoryCell = React.memo(function TrajectoryCell({
+export function TrajectoryCell({
   index,
   kind,
   text,
@@ -94,7 +94,7 @@ export const TrajectoryCell = React.memo(function TrajectoryCell({
   onClick,
   selected,
   searchMatch,
-  timelineFocus,
+  timelineDimmed,
 }: TrajectoryCellPropsExtra) {
   const label = KIND_LABEL[kind] ?? kind.toUpperCase();
   const icon = KIND_ICON[kind];
@@ -111,9 +111,9 @@ export const TrajectoryCell = React.memo(function TrajectoryCell({
       className={cn(
         'border-b border-border/40 transition-colors cursor-pointer',
         bgClass,
-        selected && 'bg-blue-50 dark:bg-blue-950/30 ring-2 ring-blue-400/50 dark:ring-blue-500/50 ring-inset',
-        searchMatch && 'bg-yellow-50 dark:bg-yellow-900/10',
-        timelineFocus && 'bg-blue-50 dark:bg-blue-900/10',
+        selected && 'bg-blue-100 dark:bg-blue-800/40 ring-2 ring-blue-400/60 dark:ring-blue-500/60 ring-inset',
+        searchMatch && 'bg-yellow-100 dark:bg-yellow-800/30',
+        timelineDimmed && 'opacity-25',
       )}
     >
       {/* Event column */}

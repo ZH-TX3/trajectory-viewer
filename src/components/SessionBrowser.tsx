@@ -45,7 +45,7 @@ function CodexIcon({ className }: { className?: string }) {
 function DshIcon({ className }: { className?: string }) {
   return (
     <svg className={className} width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <path d="M6 6h20v20H6z" fill="currentColor" opacity="0.12" rx="4" />
+      <rect x="6" y="6" width="20" height="20" rx="4" fill="currentColor" opacity="0.12" />
       <path d="M10 16l4-4 4 4-4 4-4-4z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
       <path d="M18 18h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
@@ -202,14 +202,6 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
     return s.title ?? s.sessionId.slice(0, 8) + '…';
   };
 
-  const providerColor = (id: string) => {
-    return id === 'claude'
-      ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
-      : id === 'dsh'
-      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-      : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
-  };
-
   const providerIcon = (id: string) => {
     return id === 'claude' ? 'text-violet-600 dark:text-violet-400'
       : id === 'dsh' ? 'text-amber-600 dark:text-amber-400'
@@ -218,6 +210,7 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
 
   const claudeCount = sessions.filter((s) => s.providerId === 'claude').length;
   const codexCount = sessions.filter((s) => s.providerId === 'codex').length;
+  const dshCount = sessions.filter((s) => s.providerId === 'dsh').length;
 
   return (
     <div className="flex h-full min-h-0">
@@ -320,7 +313,7 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
                           className={`
                             flex items-start gap-2 pl-7 pr-3 py-2 cursor-pointer transition-all
                             ${isSelected
-                              ? 'bg-blue-50 dark:bg-blue-950/40 border-l-[3px] border-blue-500 dark:border-blue-400 font-medium'
+                              ? 'bg-blue-100 dark:bg-blue-900/50 border-l-[3px] border-blue-500 dark:border-blue-400 font-medium text-blue-900 dark:text-blue-100'
                               : 'hover:bg-muted/60 border-l-2 border-transparent'
                             }
                           `}
@@ -389,24 +382,24 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
               <div className="flex ml-auto gap-1">
                 <button
                   onClick={() => setActiveTab('messages')}
-                  className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] transition-all ${
                     activeTab === 'messages'
-                      ? 'bg-muted/80 text-foreground font-medium shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
+                      ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200 font-medium shadow-sm ring-1 ring-blue-300 dark:ring-blue-700'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
                   }`}
                 >
-                  <MessageSquare className="size-3" />
+                  <MessageSquare className="size-3.5" />
                   Messages
                 </button>
                 <button
                   onClick={() => setActiveTab('trajectory')}
-                  className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] transition-all ${
                     activeTab === 'trajectory'
-                      ? 'bg-muted/80 text-foreground font-medium shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
+                      ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200 font-medium shadow-sm ring-1 ring-blue-300 dark:ring-blue-700'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
                   }`}
                 >
-                  <GitBranch className="size-3" />
+                  <GitBranch className="size-3.5" />
                   Trajectory
                 </button>
               </div>
@@ -470,7 +463,7 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
 
 // ── Grouping helper ──────────────────────────────────────────────────────
 
-function groupByProject(sessions: SessionMeta[], filter: ProviderFilter): GroupedSessions[] {
+function groupByProject(sessions: SessionMeta[], _filter: ProviderFilter): GroupedSessions[] {
   const groups = new Map<string, GroupedSessions>();
 
   for (const session of sessions) {

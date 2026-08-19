@@ -3,7 +3,7 @@
 // Virtual-scrolled event ledger with a resizable detail panel.
 // Uses @tanstack/react-virtual for efficient rendering of large datasets.
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { TrajectoryCell } from './TrajectoryCell';
 import { TrajectoryDetail } from './TrajectoryDetail';
@@ -74,6 +74,18 @@ export function TrajectoryTable({
     getItemKey: (index) => virtualRows[index]?.key ?? String(index),
   });
 
+  // Auto-scroll to the first focused row when timeline range changes
+  useEffect(() => {
+    if (!timelineFocusIndexes || timelineFocusIndexes.size === 0 || !tablePaneRef.current) return;
+    const firstFocusIndex = Math.min(...timelineFocusIndexes);
+    const rowIndex = virtualRows.findIndex((r) =>
+      r.entries.some((e) => e.cell.index === firstFocusIndex)
+    );
+    if (rowIndex >= 0) {
+      rowVirtualizer.scrollToIndex(rowIndex, { align: 'center' });
+    }
+  }, [timelineFocusIndexes]);
+
   const handleRecordClick = useCallback((cell: TrajectoryCellProps) => {
     setSelectedRecord((prev) => (prev?.index === cell.index ? null : cell));
   }, []);
@@ -143,7 +155,7 @@ export function TrajectoryTable({
                                 onClick={() => handleRecordClick(entry.cell)}
                                 selected={selectedRecord?.index === entry.cell.index}
                                 searchMatch={searchMatchIndexes?.has(entry.cell.index)}
-                                timelineFocus={timelineFocusIndexes?.has(entry.cell.index)}
+                                timelineDimmed={timelineFocusIndexes != null && timelineFocusIndexes.size > 0 && timelineFocusIndexes.has(entry.cell.index) === false}
                               />
                             ))}
                           </tbody>

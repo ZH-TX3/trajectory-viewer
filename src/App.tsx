@@ -4,13 +4,36 @@
 
 import { useState, useCallback } from 'react';
 import { SessionBrowser } from './components/SessionBrowser';
+import { SettingsView } from './components/SettingsView';
 import { TrajectoryView } from './components/TrajectoryView';
 import { api } from './api';
 import type { TrajectoryData } from './types';
-import { ArrowLeft, FileText } from 'lucide-react';
+import { ArrowLeft, FileText, Settings } from 'lucide-react';
+
+const AVAILABLE_PROVIDERS = ['claude', 'codex', 'dsh'] as const;
+const SETTINGS_KEY = 'trajectory-viewer.providers.enabled-v1';
+
+/** Enabled session providers, persisted locally. Defaults to all supported. */
+function loadEnabledProviders(): Set<string> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
+    if (Array.isArray(saved)) {
+      return new Set(
+        saved.filter(
+          (p): p is string =>
+            typeof p === 'string' && (AVAILABLE_PROVIDERS as readonly string[]).includes(p),
+        ),
+      );
+    }
+  } catch {
+    /* ignore */
+  }
+  return new Set(AVAILABLE_PROVIDERS);
+}
 
 export function App() {
-  const [mode, setMode] = useState<'browser' | 'file'>('browser');
+  const [mode, setMode] = useState<'browser' | 'settings' | 'file'>('browser');
+  const [enabledProviders, setEnabledProviders] = useState<Set<string>>(loadEnabledProviders);
   const [trajectoryData, setTrajectoryData] = useState<TrajectoryData | null>(null);
   const [sourcePath, setSourcePath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -47,34 +70,68 @@ export function App() {
     setError(null);
   }, []);
 
+  const handleToggleProvider = useCallback((id: string) => {
+    setEnabledProviders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify([...next].filter((p) => (AVAILABLE_PROVIDERS as readonly string[]).includes(p))),
+      );
+      return next;
+    });
+  }, []);
+
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
       {/* Header bar */}
-      <header className="h-10 border-b border-border/40 flex items-center gap-2 px-3 shrink-0 bg-background/95 backdrop-blur-sm">
-        {mode === 'file' && (
-          <button
-            onClick={handleBack}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ArrowLeft className="size-3.5" />
-            Back
-          </button>
-        )}
-        <div className="flex items-center gap-1.5 text-sm">
-          <FileText className="size-4" />
-          Trajectory Viewer
-        </div>
-        {sourcePath && (
-          <span className="text-[10px] text-muted-foreground truncate max-w-[300px] ml-2" title={sourcePath}>
-            {sourcePath}
-          </span>
-        )}
-      </header>
+      {/* Global header — hidden on the settings page, which has its own header */}
+      {mode !== 'settings' && (
+        <header className="h-10 border-b border-border/40 flex items-center gap-2 px-3 shrink-0 bg-background/95 backdrop-blur-sm relative z-50">
+          {mode === 'file' && (
+            <button
+              onClick={handleBack}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ArrowLeft className="size-3.5" />
+              Back
+            </button>
+          )}
+          <div className="flex items-center gap-1.5 text-sm">
+            <FileText className="size-4" />
+            Trajectory Viewer
+          </div>
+          {sourcePath && (
+            <span className="text-[10px] text-muted-foreground truncate max-w-[300px] ml-2" title={sourcePath}>
+              {sourcePath}
+            </span>
+          )}
+
+          <div className="ml-auto flex items-center gap-1 relative">
+            <button
+              onClick={() => setMode('settings')}
+              title="Settings"
+              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            >
+              <Settings className="size-4" />
+            </button>
+          </div>
+        </header>
+      )}
 
       {/* Main content */}
       <main className="flex-1 min-h-0">
         {mode === 'browser' && (
-          <SessionBrowser onOpenFile={handleFileOpen} />
+          <SessionBrowser onOpenFile={handleFileOpen} enabledProviders={enabledProviders} />
+        )}
+
+        {mode === 'settings' && (
+          <SettingsView
+            enabledProviders={enabledProviders}
+            onToggleProvider={handleToggleProvider}
+            onBack={handleBack}
+          />
         )}
 
         {mode === 'file' && trajectoryData && (

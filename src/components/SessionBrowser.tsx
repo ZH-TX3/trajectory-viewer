@@ -4,16 +4,53 @@
 // Right panel: Messages/Trajectory tabs.
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import type { ReactNode } from 'react';
 import { api } from '../api';
 import { TrajectoryView } from './TrajectoryView';
 import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import {
   MessageSquare, GitBranch, Clock, FileText, Loader2,
   ChevronRight, ChevronDown, Folder, FolderOpen, GripVertical,
+  Pencil, Trash2, Copy, Check,
 } from 'lucide-react';
+
+// Custom session titles are persisted locally, keyed by provider::sessionId.
+const CUSTOM_TITLES_KEY = 'trajectory-viewer.custom-titles.v1';
+function readCustomTitles(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(CUSTOM_TITLES_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+function writeCustomTitles(titles: Record<string, string>) {
+  localStorage.setItem(CUSTOM_TITLES_KEY, JSON.stringify(titles));
+}
+
+/** Resume command text for a session (claude / codex); empty for others. */
+function resumeCommandFor(session: SessionMeta | null): string {
+  if (!session) return '';
+  const id = session.sessionId;
+  if (session.providerId === 'claude') return session.resumeCommand ?? `claude --resume ${id}`;
+  if (session.providerId === 'codex') return session.resumeCommand ?? `codex resume ${id}`;
+  return session.resumeCommand ?? '';
+}
+
+// Filter chips: same shape as the settings toggle, rendered from one array.
+const PROVIDER_CHIPS: Array<{
+  id: Exclude<ProviderFilter, 'all'>;
+  label: string;
+  icon: (props: { className?: string }) => ReactNode;
+  active: string;
+}> = [
+  { id: 'claude', label: 'Claude', icon: ClaudeIcon, active: 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 shadow-sm' },
+  { id: 'codex', label: 'Codex', icon: CodexIcon, active: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 shadow-sm' },
+  { id: 'dsh', label: 'DSH', icon: DshIcon, active: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 shadow-sm' },
+];
 
 interface SessionBrowserProps {
   onOpenFile: () => void;
+  enabledProviders: ReadonlySet<string>;
 }
 
 type Tab = 'messages' | 'trajectory';
@@ -60,7 +97,7 @@ interface GroupedSessions {
   sessions: SessionMeta[];
 }
 
-export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
+export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -74,6 +111,11 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
   const [trajectoryLoading, setTrajectoryLoading] = useState(false);
   const dragRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
+  const [customTitles, setCustomTitles] = useState<Record<string, string>>(readCustomTitles);
+  const [renameFor, setRenameFor] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState('');
+  const [confirmDeleteFor, setConfirmDeleteFor] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // ── Sidebar resize handling ────────────────────────────────────────
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -120,11 +162,12 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
       .finally(() => setLoading(false));
   }, []);
 
-  // Filter sessions by provider
+  // Filter sessions: first by enabled tools (settings), then by the filter chip.
   const filteredSessions = useMemo(() => {
-    if (providerFilter === 'all') return sessions;
-    return sessions.filter((s) => s.providerId === providerFilter);
-  }, [sessions, providerFilter]);
+    const list = sessions.filter((s) => enabledProviders.has(s.providerId));
+    if (providerFilter === 'all') return list;
+    return list.filter((s) => s.providerId === providerFilter);
+  }, [sessions, providerFilter, enabledProviders]);
 
   // Group by project directory
   const groupedSessions = useMemo(() => {
@@ -193,13 +236,61 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
     });
   }, []);
 
+  const startRename = useCallback((key: string, session: SessionMeta) => {
+    setRenameText(sessionTitle(session));
+    setRenameFor(key);
+  }, [sessionTitle]);
+
+  const commitRename = useCallback(() => {
+    if (renameFor === null) return;
+    const key = renameFor;
+    setCustomTitles((prev) => {
+      const next = { ...prev };
+      if (renameText.trim()) next[key] = renameText.trim();
+      else delete next[key];
+      writeCustomTitles(next);
+      return next;
+    });
+    setRenameFor(null);
+  }, [renameFor, renameText]);
+
+  const deleteSessionHandler = useCallback(async (session: SessionMeta) => {
+    if (!session.sourcePath) return;
+    setConfirmDeleteFor(null);
+    try {
+      await api.deleteSession(session.sourcePath);
+      const key = `${session.providerId}::${session.sessionId}`;
+      setSessions((prev) => prev.filter((s) => `${s.providerId}::${s.sessionId}` !== key));
+      setSelectedKey((prev) => (prev === key ? null : prev));
+    } catch (err) {
+      console.error('delete session failed', err);
+    }
+  }, []);
+
+  const copyResume = useCallback(async () => {
+    if (!selectedSession) return;
+    const cmd = resumeCommandFor(selectedSession);
+    if (!cmd) return;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // clipboard unavailable — ignore
+    }
+  }, [selectedSession]);
+
+  function sessionTitle(s: SessionMeta) {
+    return (
+      customTitles[`${s.providerId}::${s.sessionId}`]
+      ?? s.title
+      ?? s.sessionId.slice(0, 8) + '…'
+    );
+  }
+
   const formatTime = (ts: number | null | undefined) => {
     if (!ts) return '';
     return new Date(ts).toLocaleString();
-  };
-
-  const sessionTitle = (s: SessionMeta) => {
-    return s.title ?? s.sessionId.slice(0, 8) + '…';
   };
 
   const providerIcon = (id: string) => {
@@ -211,6 +302,8 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
   const claudeCount = sessions.filter((s) => s.providerId === 'claude').length;
   const codexCount = sessions.filter((s) => s.providerId === 'codex').length;
   const dshCount = sessions.filter((s) => s.providerId === 'dsh').length;
+  const chipIdCount = (id: string) =>
+    id === 'claude' ? claudeCount : id === 'codex' ? codexCount : dshCount;
 
   return (
     <div className="flex h-full min-h-0">
@@ -222,43 +315,21 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
         {/* Provider filter icons */}
         <div className="border-b border-border/40">
           <div className="flex items-center gap-1 px-2 py-1.5 overflow-x-auto">
-            <button
-              onClick={() => setProviderFilter('claude')}
-              className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                providerFilter === 'claude'
-                  ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
-              }`}
-            >
-              <ClaudeIcon className="size-3.5" />
-              <span>Claude</span>
-              <span className="text-[10px] opacity-60">{claudeCount}</span>
-            </button>
-            <button
-              onClick={() => setProviderFilter('codex')}
-              className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                providerFilter === 'codex'
-                  ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
-              }`}
-            >
-              <CodexIcon className="size-3.5" />
-              <span>Codex</span>
-              <span className="text-[10px] opacity-60">{codexCount}</span>
-            </button>
-            {/* DSH */}
-            <button
-              onClick={() => setProviderFilter('dsh')}
-              className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                providerFilter === 'dsh'
-                  ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
-              }`}
-            >
-              <DshIcon className="size-3.5" />
-              <span>DSH</span>
-              <span className="text-[10px] opacity-60">{dshCount}</span>
-            </button>
+            {PROVIDER_CHIPS.filter((chip) => enabledProviders.has(chip.id)).map((chip) => (
+              <button
+                key={chip.id}
+                onClick={() => setProviderFilter(chip.id)}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                  providerFilter === chip.id
+                    ? chip.active
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                }`}
+              >
+                <chip.icon className="size-3.5" />
+                <span>{chip.label}</span>
+                <span className="text-[10px] opacity-60">{chipIdCount(chip.id)}</span>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -299,7 +370,7 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
                           key={key}
                           onClick={() => handleSelectSession(key)}
                           className={`
-                            flex items-start gap-2 pl-7 pr-3 py-2 cursor-pointer transition-all
+                            relative group flex items-start gap-2 pl-7 pr-6 py-2 cursor-pointer transition-all
                             ${isSelected
                               ? 'bg-blue-100 dark:bg-blue-900/50 border-l-[3px] border-blue-500 dark:border-blue-400 font-medium text-blue-900 dark:text-blue-100'
                               : 'hover:bg-muted/60 border-l-2 border-transparent'
@@ -312,13 +383,58 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
                           </div>
 
                           <div className="flex-1 min-w-0">
-                            <div className="text-xs font-medium truncate">
-                              {sessionTitle(session)}
-                            </div>
+                            {renameFor === key ? (
+                              <input
+                                value={renameText}
+                                onChange={(e) => setRenameText(e.target.value)}
+                                onBlur={commitRename}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') commitRename();
+                                  else if (e.key === 'Escape') setRenameFor(null);
+                                }}
+                                autoFocus
+                                placeholder="Session title"
+                                className="w-full text-xs bg-muted/40 rounded px-1 py-0.5 outline-none border border-border/40"
+                              />
+                            ) : (
+                              <div className="text-xs font-medium truncate">{sessionTitle(session)}</div>
+                            )}
+                            {session.summary && (
+                              <div className="text-[10px] text-muted-foreground/60 truncate mt-0.5">
+                                {session.summary}
+                              </div>
+                            )}
                             <div className="text-[10px] text-muted-foreground/60 flex items-center gap-1 mt-0.5">
                               <Clock className="size-2.5 shrink-0" />
                               <span className="truncate">{formatTime(session.lastActiveAt ?? session.createdAt)}</span>
                             </div>
+                          </div>
+
+                          {/* Row actions (hover) */}
+                          <div className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); startRename(key, session); }}
+                              title="Rename"
+                              className="p-1 rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground"
+                            >
+                              <Pencil className="size-3" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirmDeleteFor === key) deleteSessionHandler(session);
+                                else setConfirmDeleteFor(key);
+                              }}
+                              onMouseLeave={() => setConfirmDeleteFor((cur) => (cur === key ? null : cur))}
+                              title={confirmDeleteFor === key ? 'Click again to delete' : 'Delete session'}
+                              className={`p-1 rounded transition-colors ${
+                                confirmDeleteFor === key
+                                  ? 'bg-red-100 dark:bg-red-900/30 text-red-600'
+                                  : 'text-red-500 hover:text-red-600 hover:bg-red-500/10'
+                              }`}
+                            >
+                              <Trash2 className={`size-3 ${confirmDeleteFor === key ? 'fill-current' : ''}`} />
+                            </button>
                           </div>
                         </div>
                       );
@@ -395,7 +511,24 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
 
             {/* Tab content */}
             {activeTab === 'messages' && (
-              <div className="flex-1 overflow-auto p-4 space-y-3">
+              <div className="flex-1 flex flex-col min-h-0">
+                {/* Resume command header (fixed) */}
+                {selectedSession && resumeCommandFor(selectedSession) && (
+                  <div className="flex items-center gap-1.5 px-4 py-1.5 border-b border-border/40 bg-background/95 backdrop-blur-sm shrink-0">
+                    <span className="text-[10px] font-mono text-foreground/90 truncate select-all">
+                      {resumeCommandFor(selectedSession)}
+                    </span>
+                    <button
+                      onClick={copyResume}
+                      title="Copy resume command"
+                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                    >
+                      {copied ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
+                      {copied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                )}
+                <div className="flex-1 overflow-auto p-4 space-y-3">
                 {messagesLoading ? (
                   <div className="flex items-center justify-center h-20 text-xs text-muted-foreground">
                     <Loader2 className="size-3 animate-spin mr-2" />Loading messages…
@@ -424,6 +557,7 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
                     </div>
                   ))
                 )}
+                </div>
               </div>
             )}
 

@@ -114,11 +114,13 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
 
     // Skip agent sessions
     let fname = path.file_name()?.to_str()?;
-    if fname.starts_with("agent-") {
+    if fname.starts_with("agent-") || fname == "journal.jsonl" {
         return None;
     }
 
-    let (head, tail) = read_head_tail_lines(path, 10, 30).ok()?;
+    // A generous tail so ai-title / custom-title entries written mid-session
+    // are still found (the title is re-emitted periodically).
+    let (head, tail) = read_head_tail_lines(path, 10, 150).ok()?;
 
     let mut session_id: Option<String> = None;
     let mut project_dir: Option<String> = None;
@@ -174,17 +176,25 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
     let mut last_active_at: Option<i64> = None;
     let mut summary: Option<String> = None;
     let mut custom_title: Option<String> = None;
+    let mut ai_title: Option<String> = None;
 
     for line in tail.iter().rev() {
         let value: serde_json::Value = serde_json::from_str(line).ok()?;
         if last_active_at.is_none() {
             last_active_at = value.get("timestamp").and_then(parse_timestamp_to_ms);
         }
-        if custom_title.is_none()
-            && value.get("type").and_then(|v| v.as_str()) == Some("custom-title")
-        {
+        let line_type = value.get("type").and_then(|v| v.as_str());
+        // /rename writes a `custom-title` entry; the model also emits `ai-title`.
+        if custom_title.is_none() && line_type == Some("custom-title") {
             custom_title = value
                 .get("customTitle")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+        if ai_title.is_none() && line_type == Some("ai-title") {
+            ai_title = value
+                .get("aiTitle")
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
@@ -200,7 +210,7 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
                 }
             }
         }
-        if last_active_at.is_some() && summary.is_some() && custom_title.is_some() {
+        if last_active_at.is_some() && summary.is_some() {
             break;
         }
     }
@@ -211,7 +221,10 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
             .map(|s| s.to_string())
     })?;
 
+    // Prefer the user-set /rename title, then the model-generated title, then
+    // the first user message, then the project directory name.
     let title = custom_title
+        .or_else(|| ai_title)
         .or_else(|| first_user_message.map(|t| truncate(&t, 80)))
         .or_else(|| {
             project_dir
@@ -712,3 +725,37 @@ fn truncate(text: &str, max_chars: usize) -> String {
     result.push_str("...");
     result
 }
+
+/// Directories we allow session deletion from.
+fn managed_session_dirs() -> Vec<PathBuf> {
+    [claude_projects_dir(), codex_sessions_dir(), dsh_sessions_dir()]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Delete a session file directly (plus its now-empty parent directory for the
+/// DSH `{session-id}/` layout). Refuses anything outside the managed dirs.
+pub fn delete_session_file(source_path: &str) -> Result<(), String> {
+    let path = Path::new(source_path);
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if ext != "jsonl" && ext != "zstd" {
+        return Err("Refusing to delete non-session file".to_string());
+    }
+    let managed = managed_session_dirs();
+    if !managed.iter().any(|root| path.starts_with(root)) {
+        return Err("Refusing to delete outside managed session directories".to_string());
+    }
+    std::fs::remove_file(path).map_err(|e| format!("Failed to delete session file: {e}"))?;
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::remove_dir(parent); // best-effort cleanup of an empty dir
+    }
+    Ok(())
+}
+
+
+
+

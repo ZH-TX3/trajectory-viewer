@@ -28,3 +28,10 @@ pub fn get_session_messages(
 ) -> Result<Vec<session_manager::SessionMessage>, String> {
     session_manager::load_messages(&provider_id, &source_path)
 }
+
+/// Delete a session file (and its now-empty parent dir). Only paths inside the
+/// managed session directories are accepted.
+#[tauri::command]
+pub fn delete_session(source_path: String) -> Result<(), String> {
+    session_manager::delete_session_file(&source_path)
+}

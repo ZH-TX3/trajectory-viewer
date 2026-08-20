@@ -29,4 +29,9 @@ export const api = {
   ): Promise<SessionMessage[]> {
     return await invoke('get_session_messages', { providerId, sourcePath });
   },
+
+  /** Delete a session file directly. */
+  async deleteSession(sourcePath: string): Promise<void> {
+    return await invoke('delete_session', { sourcePath });
+  },
 };

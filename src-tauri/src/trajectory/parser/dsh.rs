@@ -24,6 +24,52 @@ use serde_json::Value;
 use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms};
 use crate::trajectory::{ContentBlock, TrajectoryEvent};
 
+/// Accumulated streaming state for one assistant step (keyed by turn + step).
+#[derive(Default)]
+struct StepChunkState {
+    /// Time of the first `assistant/chunk` for this step (request start).
+    first_chunk_ms: Option<i64>,
+    /// Time of the first visible output chunk (first token).
+    first_token_ms: Option<i64>,
+    /// Token usage summed from `assistant/chunk[type=usage]` events.
+    usage: Option<Usage>,
+}
+
+/// Parsed token usage counters.
+#[derive(Default, Clone, Copy)]
+struct Usage {
+    input: i64,
+    output: i64,
+    reasoning: i64,
+    cache_read: i64,
+    cache_write: i64,
+}
+
+/// Parse a usage object (`{inputTokens, outputTokens, reasoningTokens,
+/// cacheReadTokens, cacheWriteTokens}`) into counters; `None` if absent.
+fn usage_from_value(value: &Value) -> Option<Usage> {
+    let input = value["inputTokens"].as_i64();
+    let output = value["outputTokens"].as_i64();
+    let reasoning = value["reasoningTokens"].as_i64();
+    let cache_read = value["cacheReadTokens"].as_i64();
+    let cache_write = value["cacheWriteTokens"].as_i64();
+    if input.is_none()
+        && output.is_none()
+        && reasoning.is_none()
+        && cache_read.is_none()
+        && cache_write.is_none()
+    {
+        return None;
+    }
+    Some(Usage {
+        input: input.unwrap_or(0),
+        output: output.unwrap_or(0),
+        reasoning: reasoning.unwrap_or(0),
+        cache_read: cache_read.unwrap_or(0),
+        cache_write: cache_write.unwrap_or(0),
+    })
+}
+
 /// Parse a DSH session file (zstd-compressed JSONL) into trajectory events.
 pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), String> {
     let mut file = File::open(path).map_err(|e| format!("Cannot open session file: {e}"))?;
@@ -41,6 +87,7 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
     let mut seq = 0usize;
     let mut session_id = String::new();
     let mut tool_call_tracker: HashMap<String, (String, String)> = HashMap::new();
+    let mut chunk_states: HashMap<(usize, usize), StepChunkState> = HashMap::new();
     let mut current_turn = 0usize;
     let mut current_step = 0usize;
 
@@ -67,8 +114,11 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
             "user/message" => {
                 seq += 1;
 
-                // A user message starts a new turn
-                current_turn += 1;
+                // A user message starts a new turn (prefer the recorded turn id)
+                current_turn = json["data"]["turn"]
+                    .as_u64()
+                    .map(|value| value as usize)
+                    .unwrap_or(current_turn + 1);
                 current_step = 0;
 
                 let data = &json["data"];
@@ -104,10 +154,15 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
             "assistant/message" => {
                 seq += 1;
 
-                // Update step from data
-                if let Some(step) = json["data"]["step"].as_u64() {
-                    current_step = step as usize;
-                }
+                // Prefer the recorded turn/step so chunk states line up.
+                let turn_key = json["data"]["turn"]
+                    .as_u64()
+                    .map(|value| value as usize)
+                    .unwrap_or(current_turn);
+                current_step = json["data"]["step"]
+                    .as_u64()
+                    .map(|value| value as usize)
+                    .unwrap_or(current_step);
 
                 let data = &json["data"];
                 let message = &data["message"];
@@ -131,23 +186,52 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
 
                 let content_blocks = extract_content_blocks_from_value(&message["content"]);
 
-                // Extract token usage from the last chunk
-                let (
-                    input_tokens,
-                    output_tokens,
-                    reasoning_tokens,
-                    cache_read_tokens,
-                    cache_write_tokens,
-                ) = (None, None, None, None, None);
+                // Token usage: prefer the inline message usage; otherwise fall back to
+                // the usage summed from assistant/chunk[type=usage].
+                let usage = usage_from_value(&data["usage"]).or_else(|| {
+                    chunk_states
+                        .get(&(turn_key, current_step))
+                        .and_then(|state| state.usage)
+                });
+                let (input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens) = usage
+                    .map(|usage| {
+                        (
+                            Some(usage.input),
+                            Some(usage.output),
+                            Some(usage.reasoning),
+                            Some(usage.cache_read),
+                            Some(usage.cache_write),
+                        )
+                    })
+                    .unwrap_or((None, None, None, None, None));
 
                 let model = json["data"]["model"]
                     .as_str()
                     .or_else(|| message["model"].as_str())
                     .map(|s| s.to_string());
 
+                // Precise timing: step starts at the first chunk, completes
+                // here; TTFT is the gap to the first visible token.
+                let (event_ts, duration_ms, ttft_ms) = chunk_states
+                    .get(&(turn_key, current_step))
+                    .and_then(|state| {
+                        state
+                            .first_chunk_ms
+                            .map(|start| (start, ts, state.first_token_ms))
+                    })
+                    .map(|(start, complete, first_token)| {
+                        let duration = (complete - start).max(0);
+                        (
+                            start,
+                            Some(duration),
+                            first_token.map(|first| (first - start).max(0)),
+                        )
+                    })
+                    .unwrap_or((ts, None, None));
+
                 events.push(TrajectoryEvent {
                     seq,
-                    ts,
+                    ts: event_ts,
                     event_type: "assistant-message".to_string(),
                     role: Some("assistant".to_string()),
                     content: Some(content),
@@ -159,8 +243,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     is_error: None,
                     turn: Some(current_turn),
                     step: Some(current_step),
-                    duration_ms: None,
-                    ttft_ms: None,
+                    duration_ms,
+                    ttft_ms,
                     input_tokens,
                     output_tokens,
                     reasoning_tokens,
@@ -169,6 +253,7 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     model,
                     provider: Some("dsh".to_string()),
                 });
+                chunk_states.remove(&(turn_key, current_step));
             }
 
             "tool/call" => {
@@ -318,8 +403,47 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                 });
             }
 
-            // Skip streaming chunks; token usage is extracted from assistant/message events
-            "assistant/chunk" => {}
+            // Streaming chunks: accumulate first-token timing and usage so the
+                // following assistant/message can be annotated precisely.
+                "assistant/chunk" => {
+                    let data = &json["data"];
+                    let turn_key = data["turn"]
+                        .as_u64()
+                        .map(|value| value as usize)
+                        .unwrap_or(current_turn);
+                    let step_key = data["step"]
+                        .as_u64()
+                        .map(|value| value as usize)
+                        .unwrap_or(current_step);
+                    let chunk = &data["chunk"];
+                    let chunk_type = chunk["type"].as_str().unwrap_or("");
+
+                    let state = chunk_states.entry((turn_key, step_key)).or_default();
+                    if state.first_chunk_ms.is_none() {
+                        state.first_chunk_ms = Some(ts);
+                    }
+                    // First visible output marks the first token.
+                    if state.first_token_ms.is_none() {
+                        let is_first_token = chunk_type == "text-delta"
+                            || (chunk_type == "block-end"
+                                && chunk["block"]["type"].as_str() == Some("text"))
+                            || (chunk_type == "block-end"
+                                && chunk["block"]["type"].as_str() == Some("tool-call"));
+                        if is_first_token {
+                            state.first_token_ms = Some(ts);
+                        }
+                    }
+                    if chunk_type == "usage" {
+                        if let Some(chunk_usage) = usage_from_value(&chunk["usage"]) {
+                            let usage = state.usage.get_or_insert(Usage::default());
+                            usage.input += chunk_usage.input;
+                            usage.output += chunk_usage.output;
+                            usage.reasoning += chunk_usage.reasoning;
+                            usage.cache_read += chunk_usage.cache_read;
+                            usage.cache_write += chunk_usage.cache_write;
+                        }
+                    }
+                }
 
             // Skip turn/step boundaries and other metadata
             "turn/start"
@@ -635,6 +759,49 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("file1.txt"));
+    }
+
+    #[test]
+    fn parse_dsh_chunk_usage_and_timing() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl.zstd");
+
+        create_dsh_session(
+            &path,
+            &[
+                r#"{"type":"session","id":"sess-3","createdAt":1787023345223,"cwd":"/tmp"}"#,
+                r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"turn":7,"content":[{"type":"text","text":"hi"}]}}"#,
+                // turn 7 step 1: usage only appears in a chunk; message has none
+                r#"{"type":"assistant/chunk","seq":2,"time":1787023347000,"data":{"turn":7,"step":1,"chunk":{"blockType":"text","index":0,"type":"block-start"}}}"#,
+                r#"{"type":"assistant/chunk","seq":3,"time":1787023347100,"data":{"turn":7,"step":1,"chunk":{"index":0,"text":"he","type":"text-delta"}}}"#,
+                r#"{"type":"assistant/chunk","seq":4,"time":1787023347400,"data":{"turn":7,"step":1,"chunk":{"block":{"text":"hello","type":"text"},"index":0,"type":"block-end"}}}"#,
+                r#"{"type":"assistant/chunk","seq":5,"time":1787023347401,"data":{"turn":7,"step":1,"chunk":{"type":"usage","usage":{"inputTokens":100,"outputTokens":25}}}}"#,
+                r#"{"type":"assistant/message","seq":6,"time":1787023347500,"data":{"turn":7,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"source":{"kind":"model","model":"deepseek-chat"}}}}"#,
+                // turn 8 step 1: message carries inline usage, no chunks
+                r#"{"type":"assistant/message","seq":7,"time":1787023349000,"data":{"turn":8,"step":1,"usage":{"inputTokens":50,"outputTokens":5,"cacheReadTokens":30},"message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"source":{"kind":"model","model":"deepseek-chat"}}}}"#,
+            ],
+        );
+
+        let (_sid, events) = parse_trajectory(&path).unwrap();
+        assert_eq!(events.len(), 3);
+
+        // Turn id from data wins over the local counter.
+        assert_eq!(events[0].turn, Some(7));
+
+        // Chunk-usage fallback with precise timing from streaming timestamps.
+        let asst = &events[1];
+        assert_eq!(asst.event_type, "assistant-message");
+        assert_eq!(asst.ts, 1787023347000); // step starts at first chunk
+        assert_eq!(asst.duration_ms, Some(500));
+        assert_eq!(asst.ttft_ms, Some(100));
+        assert_eq!(asst.input_tokens, Some(100));
+        assert_eq!(asst.output_tokens, Some(25));
+
+        // Inline message usage.
+        let asst2 = &events[2];
+        assert_eq!(asst2.input_tokens, Some(50));
+        assert_eq!(asst2.output_tokens, Some(5));
+        assert_eq!(asst2.cache_read_tokens, Some(30));
     }
 
     #[test]

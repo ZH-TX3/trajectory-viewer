@@ -221,19 +221,7 @@ export function SessionBrowser({ onOpenFile }: SessionBrowserProps) {
       >
         {/* Provider filter icons */}
         <div className="border-b border-border/40">
-          <div className="flex items-center gap-1 px-2 py-1.5">
-            <button
-              onClick={() => setProviderFilter('all')}
-              className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                providerFilter === 'all'
-                  ? 'bg-muted/80 text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
-              }`}
-            >
-              <MessageSquare className="size-3" />
-              <span>All</span>
-              <span className="text-[10px] opacity-60">{sessions.length}</span>
-            </button>
+          <div className="flex items-center gap-1 px-2 py-1.5 overflow-x-auto">
             <button
               onClick={() => setProviderFilter('claude')}
               className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${

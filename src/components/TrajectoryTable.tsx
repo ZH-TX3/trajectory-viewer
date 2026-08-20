@@ -8,7 +8,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { TrajectoryCell } from './TrajectoryCell';
 import { TrajectoryDetail } from './TrajectoryDetail';
 import type { TrajectoryCellProps, TrajectoryTurnModel } from '../utils/layout';
-import { groupVirtualRows } from '../utils/layout';
+import { aggregateRequestDetail, groupVirtualRows } from '../utils/layout';
 
 interface TrajectoryTableProps {
   turns: readonly TrajectoryTurnModel[];
@@ -16,6 +16,8 @@ interface TrajectoryTableProps {
   searchMatchIndexes?: ReadonlySet<number> | null;
   timelineFocusIndexes?: ReadonlySet<number> | null;
   collapsedTurns: ReadonlySet<number>;
+  /** Timeline-clicked record; opens the detail panel and scrolls it into view. */
+  selectedIndex?: number | null;
   _onToggleTurn?: (turn: number) => void;
   _collapsedAssistants?: ReadonlySet<string>;
   _onToggleAssistant?: (id: string) => void;
@@ -27,6 +29,8 @@ export function TrajectoryTable({
   searchMatchIndexes = null,
   timelineFocusIndexes = null,
   collapsedTurns,
+  selectedIndex = null,
+  _collapsedAssistants = undefined,
 }: TrajectoryTableProps) {
   const tablePaneRef = useRef<HTMLDivElement>(null);
   const [selectedRecord, setSelectedRecord] = useState<TrajectoryCellProps | null>(null);
@@ -48,7 +52,19 @@ export function TrajectoryTable({
     return records;
   }, [turns, streamingCells]);
 
-  // Apply filters: search, collapse
+  // Record index → its assistant step key (turn + group), for the Calls filter.
+  const groupKeyByIndex = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const turn of turns) {
+      for (const group of turn.groups) {
+        const key = `${turn.turn ?? 0}\0${group.title}`;
+        for (const cell of group.cells) map.set(cell.index, key);
+      }
+    }
+    return map;
+  }, [turns]);
+
+  // Apply filters: search, collapse turns, collapse calls
   const filteredRecords = useMemo(() => {
     let records = allRecords;
 
@@ -60,8 +76,20 @@ export function TrajectoryTable({
       records = records.filter((r) => r.turn == null || !collapsedTurns.has(r.turn));
     }
 
+    // Calls collapse: keep only the first row of each assistant step group.
+    if (_collapsedAssistants !== undefined && _collapsedAssistants.size > 0) {
+      const seenGroups = new Set<string>();
+      records = records.filter((cell) => {
+        const key = groupKeyByIndex.get(cell.index);
+        if (key === undefined || !_collapsedAssistants.has(key)) return true;
+        if (seenGroups.has(key)) return false;
+        seenGroups.add(key);
+        return true;
+      });
+    }
+
     return records;
-  }, [allRecords, searchMatchIndexes, collapsedTurns]);
+  }, [allRecords, searchMatchIndexes, collapsedTurns, _collapsedAssistants, groupKeyByIndex]);
 
   // Virtual rows
   const virtualRows = useMemo(() => groupVirtualRows(filteredRecords), [filteredRecords]);
@@ -86,6 +114,25 @@ export function TrajectoryTable({
     }
   }, [timelineFocusIndexes]);
 
+  // A timeline-clicked record opens the detail panel and scrolls row into view;
+// clearing it (selectedIndex → null, e.g. Escape) closes the detail panel.
+  useEffect(() => {
+    if (selectedIndex == null) {
+      setSelectedRecord(null);
+      return;
+    }
+    const cell = allRecords.find((r) => r.index === selectedIndex);
+    if (cell) {
+      setSelectedRecord((prev) => (prev?.index === selectedIndex ? prev : cell));
+    }
+    const rowIndex = virtualRows.findIndex((r) =>
+      r.entries.some((e) => e.cell.index === selectedIndex)
+    );
+    if (rowIndex >= 0) {
+      rowVirtualizer.scrollToIndex(rowIndex, { align: 'center' });
+    }
+  }, [selectedIndex]);
+
   const handleRecordClick = useCallback((cell: TrajectoryCellProps) => {
     setSelectedRecord((prev) => (prev?.index === cell.index ? null : cell));
   }, []);
@@ -94,19 +141,29 @@ export function TrajectoryTable({
     setSelectedRecord(null);
   }, []);
 
+  // Aggregate the request (turn + group) around the selected record, so the
+  // detail panel can show the whole assistant step like DSH does.
+  const selectedRequest = useMemo(
+    () => (selectedRecord ? aggregateRequestDetail(turns, selectedRecord.index) : null),
+    [selectedRecord, turns],
+  );
+
   // Summary stats
   const { totalTurns, totalCalls } = useMemo(() => {
     let tc = 0;
-    let cc = 0;
+    // tool-call + tool-result share a callId; count distinct calls.
+    const callIds = new Set<string>();
     for (const turn of turns) {
       if (turn.turn != null) tc++;
       for (const group of turn.groups) {
         for (const cell of group.cells) {
-          if (cell.kind === 'tool' || cell.kind === 'subtool') cc++;
+          if (cell.kind === 'tool' || cell.kind === 'subtool') {
+            callIds.add(cell.callId ?? `${cell.kind}:${cell.index}`);
+          }
         }
       }
     }
-    return { totalTurns: tc, totalCalls: cc };
+    return { totalTurns: tc, totalCalls: callIds.size };
   }, [turns]);
 
   return (
@@ -187,6 +244,7 @@ export function TrajectoryTable({
       {selectedRecord && (
         <TrajectoryDetail
           cell={selectedRecord}
+          request={selectedRequest}
           onClose={handleCloseDetail}
           detailWidth={detailWidth}
           onWidthChange={setDetailWidth}

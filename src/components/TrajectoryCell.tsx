@@ -64,14 +64,14 @@ const KIND_COLOR: Record<string, string> = {
   subtool: 'text-amber-500 dark:text-amber-300',
 };
 
-const KIND_BG: Record<string, string> = {
-  system: 'bg-gray-100 dark:bg-gray-800/50',
-  user: 'bg-emerald-50 dark:bg-emerald-900/20',
-  context: 'bg-green-50 dark:bg-green-900/20',
-  compacted: 'bg-gray-50 dark:bg-gray-800/30',
-  message: 'bg-violet-50 dark:bg-violet-900/20',
-  tool: 'bg-amber-50 dark:bg-amber-900/20',
-  subtool: 'bg-amber-50/50 dark:bg-amber-900/10',
+// Horizontal indent per record kind — tools nest below the assistant message.
+const KIND_INDENT: Record<string, number> = {
+  system: 8,
+  user: 8,
+  context: 8,
+  message: 28,
+  tool: 44,
+  subtool: 56,
 };
 
 interface TrajectoryCellPropsExtra extends TrajectoryCellProps {
@@ -100,7 +100,6 @@ export function TrajectoryCell({
   const label = KIND_LABEL[kind] ?? kind.toUpperCase();
   const icon = KIND_ICON[kind];
   const colorClass = KIND_COLOR[kind] ?? 'text-gray-500';
-  const bgClass = KIND_BG[kind] ?? '';
 
   return (
     <tr
@@ -112,8 +111,8 @@ export function TrajectoryCell({
       onClick={onClick}
       className={cn(
         'border-b border-border/40 transition-colors cursor-pointer',
-        bgClass,
         selected && 'bg-blue-100 dark:bg-blue-800/40 ring-2 ring-blue-400/60 dark:ring-blue-500/60 ring-inset',
+        !selected && 'hover:bg-blue-50 dark:hover:bg-blue-900/20',
         searchMatch && 'bg-yellow-100 dark:bg-yellow-800/30',
       )}
     >
@@ -123,9 +122,12 @@ export function TrajectoryCell({
           <span className="text-muted-foreground font-mono text-[10px] w-6 text-right shrink-0">
             #{index}
           </span>
-          <span className={cn('inline-flex items-center gap-0.5 font-medium', colorClass)}>
+          <span
+            className={cn('inline-flex items-center gap-0.5 shrink-0 font-normal', colorClass)}
+            style={{ paddingLeft: KIND_INDENT[kind] ?? 0 }}
+          >
             {icon && <span className="shrink-0">{icon}</span>}
-            <span className="truncate max-w-[4rem]">{label}</span>
+            <span className="truncate max-w-[5rem]">{label}</span>
           </span>
         </div>
       </td>

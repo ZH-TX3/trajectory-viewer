@@ -60,7 +60,7 @@ export function App() {
             Back
           </button>
         )}
-        <div className="flex items-center gap-1.5 font-medium text-sm">
+        <div className="flex items-center gap-1.5 text-sm">
           <FileText className="size-4" />
           Trajectory Viewer
         </div>

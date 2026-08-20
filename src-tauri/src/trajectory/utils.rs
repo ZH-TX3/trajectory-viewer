@@ -66,15 +66,21 @@ pub fn parse_timestamp_to_ms(value: &serde_json::Value) -> Option<i64> {
 
 /// Estimate per-event duration from the following event timestamp and
 /// approximate TTFT for assistant messages.
+///
+/// Providers that already record precise values (e.g. DSH from streaming
+/// chunk timestamps) keep them; only events without a value get the estimate.
 pub fn finalize_trajectory_timings(events: &mut [crate::trajectory::TrajectoryEvent]) {
     for i in 0..events.len() {
         let ts = events[i].ts;
-        let next_ts = events.get(i + 1).map(|event| event.ts).unwrap_or(ts);
-        if next_ts > ts {
-            events[i].duration_ms = Some(next_ts - ts);
+
+        if events[i].duration_ms.is_none() {
+            let next_ts = events.get(i + 1).map(|event| event.ts).unwrap_or(ts);
+            if next_ts > ts {
+                events[i].duration_ms = Some(next_ts - ts);
+            }
         }
 
-        if events[i].event_type == "assistant-message" {
+        if events[i].event_type == "assistant-message" && events[i].ttft_ms.is_none() {
             if let Some(duration_ms) = events[i].duration_ms {
                 // Rough estimate: TTFT ≈ one-third of total duration, capped at 3s
                 events[i].ttft_ms = Some((duration_ms / 3).min(3000));

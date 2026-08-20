@@ -4,6 +4,7 @@
 // suitable for rendering in TrajectoryTable and TrajectoryTimeline.
 
 import type { TrajectoryEvent, ContentBlock } from '../types';
+import { trajectoryPreviewText } from './format';
 
 // ── Cell types ────────────────────────────────────────────────────────────
 
@@ -364,6 +365,10 @@ const CONTENT_ROW_HEIGHT = 30;
 
 /**
  * Group records into measurable virtual rows.
+ *
+ * The row key MUST be unique per row: tool-call and tool-result cells share
+ * the same callId (and kind), so trajectoryRecordId alone would collide and
+ * cause React to overlap/reuse rows (ghosting with progressively bolder text).
  */
 export function groupVirtualRows(records: TrajectoryCellProps[]): VirtualRow[] {
   const rows: VirtualRow[] = [];
@@ -372,7 +377,7 @@ export function groupVirtualRows(records: TrajectoryCellProps[]): VirtualRow[] {
     rows.push({
       entries: [{ logicalIndex: cell.index, cell }],
       height: CONTENT_ROW_HEIGHT,
-      key: trajectoryRecordId(cell),
+      key: `${trajectoryRecordId(cell)}\0#\0${cell.index}`,
     });
   }
 
@@ -526,4 +531,270 @@ export function trajectoryTimelineFocusIndexes(
       .filter((span) => span.start <= range.end && span.end >= range.start)
       .map((span) => span.index),
   );
+}
+
+// ── Assistant timing detail ───────────────────────────────────────────────
+//
+// Ported from DSH assistantTimingDetail/timelineRecordDetail: derive precise
+// TTFT (step start → first token) and decoding (first token → completed) from
+// the recorded step timings, when all three points are present and ordered.
+
+export interface TimelineRecordDetail {
+  durationMs?: number;
+  startedAt?: number;
+  ttftMs?: number;
+  decodingMs?: number;
+}
+
+export function assistantTimingDetail(
+  metrics: AssistantMetricDetail | null | undefined,
+): Pick<TimelineRecordDetail, 'ttftMs' | 'decodingMs'> {
+  const start = metrics?.stepStartTime;
+  const first = metrics?.firstTokenTime;
+  const completed = metrics?.completedTime;
+  if (
+    metrics?.timingRecorded !== true ||
+    typeof start !== 'number' ||
+    typeof first !== 'number' ||
+    typeof completed !== 'number' ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(first) ||
+    !Number.isFinite(completed) ||
+    first < start ||
+    completed < first
+  ) {
+    return {};
+  }
+  return { ttftMs: first - start, decodingMs: completed - first };
+}
+
+export function timelineRecordDetail(cell: TrajectoryCellProps): TimelineRecordDetail {
+  const durationMs =
+    cell.timeSeconds === null || !Number.isFinite(cell.timeSeconds)
+      ? undefined
+      : Math.max(0, cell.timeSeconds * 1000);
+  const startedAt =
+    cell.startedAt === null || !Number.isFinite(cell.startedAt)
+      ? undefined
+      : cell.startedAt;
+  return {
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...assistantTimingDetail(cell.assistantMetrics),
+  };
+}
+
+// ── Trajectory search index (ported from DSH TrajectorySearchIndex) ───────
+//
+// Incremental per-record index keyed by stable record id. Re-parses Markdown
+// only when a record's source fields actually change; search matches every
+// whitespace-separated term against the joined lowercased text.
+
+function sameSources(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function markdownPreview(cell: TrajectoryCellProps): string {
+  if (cell.previewMarkdown === undefined) return '';
+  const preview = trajectoryPreviewText(cell.previewMarkdown);
+  if (cell.text === '') return preview;
+  return preview === '' ? cell.text : `${cell.text} · ${preview}`;
+}
+
+function resultPreview(cell: TrajectoryCellProps): string {
+  return cell.resultPreviewMarkdown === undefined
+    ? cell.result ?? ''
+    : trajectoryPreviewText(cell.resultPreviewMarkdown);
+}
+
+function recordSources(
+  turn: number | null,
+  groupTitle: string,
+  cell: TrajectoryCellProps,
+): string[] {
+  const blocks = [...(cell.sourceBlocks ?? []), ...(cell.outputBlocks ?? [])];
+  return [
+    turn === null ? 'between turns' : `turn ${turn}`,
+    groupTitle,
+    cell.kind,
+    cell.kind === 'message' ? 'assistant' : '',
+    cell.text,
+    cell.previewMarkdown ?? '',
+    cell.inputDetail ?? '',
+    cell.outputDetail ?? '',
+    cell.thinkingDetail ?? '',
+    cell.schemaDetail ?? '',
+    cell.result ?? '',
+    cell.resultPreviewMarkdown ?? '',
+    cell.callId ?? '',
+    ...blocks.flatMap((block) => [
+      block.type,
+      block.content,
+      block.callId ?? '',
+      block.toolName ?? '',
+      block.imageAlt ?? '',
+    ]),
+  ];
+}
+
+export interface TrajectorySearchEntry {
+  sources: readonly string[];
+  text: string;
+}
+
+export class TrajectorySearchIndex {
+  private entries = new Map<string, TrajectorySearchEntry>();
+  private layouts?: readonly TrajectoryTurnModel[][];
+
+  /** Incrementally synchronize the index with the given layout slices. */
+  update(layouts: readonly TrajectoryTurnModel[][]): boolean {
+    if (this.layouts === layouts) return false;
+    this.layouts = layouts;
+    const seen = new Set<string>();
+
+    for (const turns of layouts) {
+      for (const turn of turns) {
+        for (const group of turn.groups) {
+          for (const cell of group.cells) {
+            if (cell.requestOnly === true) continue;
+            const id = trajectoryRecordId(cell);
+            const sources = recordSources(turn.turn, group.title, cell);
+            const previous = this.entries.get(id);
+            const entry =
+              previous !== undefined && sameSources(previous.sources, sources)
+                ? previous
+                : {
+                    sources,
+                    text: [...sources, markdownPreview(cell), resultPreview(cell)]
+                      .join('\n')
+                      .toLocaleLowerCase(),
+                  };
+            this.entries.set(id, entry);
+            seen.add(id);
+          }
+        }
+      }
+    }
+
+    for (const id of this.entries.keys()) {
+      if (!seen.has(id)) this.entries.delete(id);
+    }
+    return true;
+  }
+
+  /** Match space-separated case-insensitive terms; `null` without a query. */
+  search(query: string): Set<string> | null {
+    const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return null;
+    const matches = new Set<string>();
+    for (const [id, entry] of this.entries) {
+      if (terms.every((term) => entry.text.includes(term))) matches.add(id);
+    }
+    return matches;
+  }
+}
+
+// ── Request aggregation ───────────────────────────────────────────────────
+//
+// A "request" groups every record that belongs to one assistant step
+// (turn + group, e.g. "Message" / "Step 2"). Selecting any record inside an
+// assistant/tool step shows the aggregate request detail, mirroring DSH.
+
+export interface TrajectoryUsage {
+  input?: number;
+  output?: number;
+  think?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
+export interface TrajectoryRequestDetail {
+  turn: number | null;
+  group: string;
+  number: number;
+  state: 'complete' | 'error';
+  toolCalls: number;
+  subtoolCalls: number;
+  assistant?: TrajectoryCellProps;
+  usage?: TrajectoryUsage;
+  cumulative?: TrajectoryUsage;
+  records: readonly TrajectoryCellProps[];
+}
+
+function mergeCellUsage(list: readonly TrajectoryCellProps[]): TrajectoryUsage | undefined {
+  const out: TrajectoryUsage = {};
+  let any = false;
+  for (const cell of list) {
+    for (const [key, value] of [
+      ['input', cell.input],
+      ['output', cell.output],
+      ['think', cell.think],
+      ['cacheRead', cell.cacheRead],
+      ['cacheWrite', cell.cacheWrite],
+    ] as const) {
+      if (value == null) continue;
+      out[key] = (out[key] ?? 0) + value;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
+}
+
+function addUsage(left: TrajectoryUsage, right: TrajectoryUsage): TrajectoryUsage {
+  const out: TrajectoryUsage = { ...left };
+  for (const key of ['input', 'output', 'think', 'cacheRead', 'cacheWrite'] as const) {
+    const value = right[key];
+    if (value != null) out[key] = (out[key] ?? 0) + value;
+  }
+  return out;
+}
+
+/**
+ * Aggregate the request a record belongs to. Records outside any request
+ * (prologue system/compacted/etc.) return `null` — they open record-level.
+ */
+export function aggregateRequestDetail(
+  turns: readonly TrajectoryTurnModel[],
+  cellIndex: number,
+): TrajectoryRequestDetail | null {
+  let requestNumber = 0;
+  let cumulative: TrajectoryUsage | undefined;
+
+  for (const turn of turns) {
+    for (const group of turn.groups) {
+      // A request group is any non-prologue group (turn > 0).
+      const isRequest = turn.turn != null;
+      if (isRequest) requestNumber += 1;
+
+      const cells = group.cells;
+      const hit = cells.some((cell) => cell.index === cellIndex);
+      if (!hit) {
+        if (isRequest) {
+          cumulative = addUsage(cumulative ?? {}, mergeCellUsage(cells) ?? {});
+        }
+        continue;
+      }
+      if (!isRequest) return null; // prologue → record-level selection
+
+      const usage = mergeCellUsage(cells);
+      // DSH's cumulative usage INCLUDES the current request.
+      cumulative = addUsage(cumulative ?? {}, usage ?? {});
+      const hasUsage =
+        cumulative.input != null || cumulative.output != null || cumulative.think != null;
+
+      return {
+        turn: turn.turn,
+        group: group.title,
+        number: requestNumber,
+        state: cells.some((cell) => cell.isError === true) ? 'error' : 'complete',
+        toolCalls: cells.filter((cell) => cell.kind === 'tool').length,
+        subtoolCalls: cells.filter((cell) => cell.kind === 'subtool').length,
+        assistant: cells.find((cell) => cell.kind === 'message'),
+        usage,
+        cumulative: hasUsage ? cumulative : undefined,
+        records: cells,
+      };
+    }
+  }
+  return null;
 }

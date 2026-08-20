@@ -2,14 +2,16 @@
 //
 // Main trajectory view orchestrating toolbar, timeline, and table.
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TrajectoryToolbar } from './TrajectoryToolbar';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
 import { TrajectoryTable } from './TrajectoryTable';
 import {
   deriveTrajectoryLayout,
+  trajectoryRecordId,
   trajectoryTimelineFocusIndexes,
 } from '../utils/layout';
+import { TrajectorySearchIndex } from '../utils/layout';
 import type { TrajectoryTurnModel, TrajectoryTimelineMode } from '../utils/layout';
 import type { TrajectoryData } from '../types';
 
@@ -24,6 +26,7 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
   const [collapsedAssistants, setCollapsedAssistants] = useState<Set<string>>(new Set());
   const [actualDuration, setActualDuration] = useState(false);
   const [timelineRange, setTimelineRange] = useState<{ start: number; end: number } | null>(null);
+  const [selectedRecordIndex, setSelectedRecordIndex] = useState<number | null>(null);
 
   // Derive layout from events
   const turns = useMemo(() => {
@@ -31,29 +34,40 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
     return deriveTrajectoryLayout(data.events);
   }, [data]);
 
-  // Search index
+  // Search index (ported from DSH TrajectorySearchIndex): one stable index
+  // keyed by record id, rebuilt as layouts change, queried for the input.
+  const searchIndexRef = useRef<TrajectorySearchIndex | null>(null);
+  if (searchIndexRef.current === null) searchIndexRef.current = new TrajectorySearchIndex();
+  const [searchIndexRevision, setSearchIndexRevision] = useState(0);
+  const searchLayouts = useMemo(() => [turns] as TrajectoryTurnModel[][], [turns]);
+
+  useEffect(() => {
+    const index = searchIndexRef.current;
+    if (index !== null && index.update(searchLayouts)) {
+      setSearchIndexRevision((revision) => revision + 1);
+    }
+  }, [searchLayouts]);
+
   const searchMatchIndexes = useMemo(() => {
-    if (!searchQuery.trim()) return null;
-    const query = searchQuery.toLowerCase();
+    const index = searchIndexRef.current;
+    if (index === null) return null;
+    // Re-query whenever the index changes below.
+    void searchIndexRevision;
+    const recordIds = index.search(searchQuery);
+    if (recordIds === null) return null;
+
     const matches = new Set<number>();
-
-    for (const turn of turns) {
-      for (const group of turn.groups) {
-        for (const cell of group.cells) {
-          const searchText = [cell.text, cell.previewMarkdown, cell.inputDetail, cell.outputDetail, cell.toolName, cell.result]
-            .filter(Boolean)
-            .join(' ')
-            .toLowerCase();
-
-          if (searchText.includes(query)) {
-            matches.add(cell.index);
+    for (const turnsSlice of searchLayouts) {
+      for (const turn of turnsSlice) {
+        for (const group of turn.groups) {
+          for (const cell of group.cells) {
+            if (recordIds.has(trajectoryRecordId(cell))) matches.add(cell.index);
           }
         }
       }
     }
-
     return matches;
-  }, [turns, searchQuery]);
+  }, [searchIndexRevision, searchQuery, searchLayouts]);
 
   // The timeline projects every record into a shared coordinate space; the
   // drag range lives in that space. Map it back to the exact record indexes.
@@ -93,15 +107,12 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
     if (allAssistantsCollapsed) {
       setCollapsedAssistants(new Set());
     } else {
-      const ids = new Set<string>();
+      // Collapse each assistant step (= turn + group) to its first row.
+      const keys = new Set<string>();
       for (const turn of turns) {
-        for (const group of turn.groups) {
-          for (const cell of group.cells) {
-            if (cell.recordId) ids.add(cell.recordId);
-          }
-        }
+        for (const group of turn.groups) keys.add(`${turn.turn ?? 0}\0${group.title}`);
       }
-      setCollapsedAssistants(ids);
+      setCollapsedAssistants(keys);
     }
   }, [allAssistantsCollapsed, turns]);
 
@@ -129,19 +140,36 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
     setTimelineRange(null);
   }, []);
 
+  // Escape clears both the box-select range and the point-selected record,
+  // returning the view to its default state.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setTimelineRange(null);
+        setSelectedRecordIndex(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Count turns and calls
   const { turnCount, callCount } = useMemo(() => {
     let tc = 0;
-    let cc = 0;
+    // A single tool invocation yields a tool-call AND a tool-result cell, both
+    // kind "tool"; count distinct calls by callId instead of cells.
+    const callIds = new Set<string>();
     for (const turn of turns) {
       if (turn.turn != null) tc++;
       for (const group of turn.groups) {
         for (const cell of group.cells) {
-          if (cell.kind === 'tool' || cell.kind === 'subtool') cc++;
+          if (cell.kind === 'tool' || cell.kind === 'subtool') {
+            callIds.add(cell.callId ?? `${cell.kind}:${cell.index}`);
+          }
         }
       }
     }
-    return { turnCount: tc, callCount: cc };
+    return { turnCount: tc, callCount: callIds.size };
   }, [turns]);
 
   return (
@@ -166,7 +194,9 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
         mode={timelineMode}
         range={timelineRange}
         searchMatchIndexes={searchMatchIndexes}
+        selectedIndex={selectedRecordIndex}
         onRangeChange={handleTimelineRangeChange}
+        onRecordSelect={setSelectedRecordIndex}
       />
 
       {/* Table */}
@@ -175,6 +205,7 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
         searchMatchIndexes={searchMatchIndexes}
         timelineFocusIndexes={timelineFocusIndexes}
         collapsedTurns={collapsedTurns}
+        selectedIndex={selectedRecordIndex}
         _onToggleTurn={handleToggleTurn}
         _collapsedAssistants={collapsedAssistants}
         _onToggleAssistant={handleToggleAssistant}

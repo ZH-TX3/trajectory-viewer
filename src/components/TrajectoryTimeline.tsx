@@ -10,7 +10,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { TrajectoryTurnModel, TrajectoryTimelineMode } from '../utils/layout';
 import { deriveTrajectoryTimeline, timelineRecordDetail } from '../utils/layout';
-import { formatDurationMs, formatDurationSeconds, formatTimestamp } from '../utils/format';
+import { formatDurationMs, formatDurationSeconds, formatRecordedTime } from '../utils/format';
 import { cn } from '../lib/utils';
 
 interface TrajectoryTimelineProps {
@@ -352,7 +352,7 @@ export function TrajectoryTimeline({
     <section
       ref={rootRef}
       aria-label="Trajectory timeline"
-      className="h-[50px] border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
+      className="relative h-[50px] border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
     >
       <LaneLabels />
 
@@ -471,26 +471,52 @@ export function TrajectoryTimeline({
           </div>
         )}
 
-        {/* Hover tooltip */}
-        {hoveredSpan !== undefined && hoveredSpan !== null && (
-          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 rounded bg-popover border border-border/40 shadow-md text-[10px] whitespace-nowrap z-20 pointer-events-none">
-            <div>{hoveredSpan.label}</div>
-            <div className="text-muted-foreground">
-              {hoveredSpan.start >= 1e12
-                ? formatTimestamp(hoveredSpan.start)
-                : `#${hoveredSpan.index} · ${formatDurationSeconds((hoveredSpan.end - hoveredSpan.start) / 1000)}`}
-            </div>
-            {hoveredDetail !== undefined &&
-              (hoveredDetail.ttftMs !== undefined || hoveredDetail.decodingMs !== undefined) && (
-                <div className="text-muted-foreground">
-                  Total {formatDurationMs(hoveredDetail.durationMs ?? null)} · TTFT{' '}
-                  {formatDurationMs(hoveredDetail.ttftMs ?? null)} · Decoding{' '}
-                  {formatDurationMs(hoveredDetail.decodingMs ?? null)}
+        </div>
+
+      {/* Hover tooltip — absolutely positioned against the section root (which
+          has no overflow clipping) so it can pop above the track. */}
+      {hoveredSpan !== undefined && hoveredSpan !== null && hover !== null &&
+        (() => {
+          const sectionRect = rootRef.current?.getBoundingClientRect();
+          const trackRect = trackRef.current?.getBoundingClientRect();
+          if (!sectionRect || !trackRect) return null;
+          return (
+            <div
+              className="absolute z-50 px-2 py-1 rounded bg-black/85 text-white border border-white/10 shadow-[0_4px_12px_rgba(0,0,0,0.35)] text-[10px] max-w-[300px] overflow-hidden pointer-events-none"
+              style={{
+                left: trackRect.left - sectionRect.left + hover.fraction * trackRect.width,
+                top: trackRect.top - sectionRect.top - 4,
+                transform: 'translate(-50%, -100%)',
+              }}
+            >
+              <div className="truncate">{hoveredSpan.label}</div>
+              {hoveredDetail !== undefined && hoveredDetail.startedAt !== undefined ? (
+                <div className="text-white/70 truncate">
+                  {formatRecordedTime(hoveredDetail.startedAt)}
+                  {hoveredDetail.durationMs !== undefined
+                    ? ` → ${formatRecordedTime(hoveredDetail.startedAt + hoveredDetail.durationMs)}`
+                    : ''}
+                </div>
+              ) : (
+                <div className="text-white/70 truncate">
+                  #{hoveredSpan.index} ·{' '}
+                  {formatDurationSeconds((hoveredSpan.end - hoveredSpan.start) / 1000)}
                 </div>
               )}
-          </div>
-        )}
-      </div>
+              {hoveredDetail !== undefined &&
+                (hoveredDetail.durationMs !== undefined ||
+                  hoveredDetail.ttftMs !== undefined ||
+                  hoveredDetail.decodingMs !== undefined) && (
+                  <div className="text-white/70 truncate">
+                    Total {formatDurationMs(hoveredDetail.durationMs ?? null)}
+                    {hoveredDetail.ttftMs !== undefined && hoveredDetail.decodingMs !== undefined
+                      ? ` · TTFT ${formatDurationMs(hoveredDetail.ttftMs)} · Decoding ${formatDurationMs(hoveredDetail.decodingMs)}`
+                      : ''}
+                  </div>
+                )}
+            </div>
+          );
+        })()}
     </section>
   );
 }

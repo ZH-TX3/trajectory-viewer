@@ -40,6 +40,17 @@ export function formatDateTime(ts: number | null | undefined): string {
 }
 
 /**
+ * Format a timestamp as HH:MM:SS.mmm (wall-clock time), DSH formatRecordedTime.
+ */
+export function formatRecordedTime(ts: number | null | undefined): string {
+  if (ts == null || !Number.isFinite(ts)) return '—';
+  const date = new Date(ts);
+  const two = (v: number) => String(v).padStart(2, '0');
+  const three = (v: number) => String(v).padStart(3, '0');
+  return `${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}.${three(date.getMilliseconds())}`;
+}
+
+/**
  * Format a duration in seconds for the timeline tooltip.
  */
 export function formatDurationSeconds(seconds: number | null): string {

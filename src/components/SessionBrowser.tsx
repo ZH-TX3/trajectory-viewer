@@ -11,7 +11,7 @@ import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import {
   MessageSquare, GitBranch, Clock, FileText, Loader2,
   ChevronRight, ChevronDown, Folder, FolderOpen, GripVertical,
-  Pencil, Trash2, Copy, Check,
+  Pencil, Trash2, Copy, Check, RotateCw,
 } from 'lucide-react';
 
 // Custom session titles are persisted locally, keyed by provider::sessionId.
@@ -95,6 +95,8 @@ interface GroupedSessions {
   groupName: string;
   providerId: string;
   sessions: SessionMeta[];
+  /** Storage directories backing this group (for bulk delete). */
+  storageDirs: string[];
 }
 
 export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserProps) {
@@ -114,7 +116,17 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
   const [customTitles, setCustomTitles] = useState<Record<string, string>>(readCustomTitles);
   const [renameFor, setRenameFor] = useState<string | null>(null);
   const [renameText, setRenameText] = useState('');
-  const [confirmDeleteFor, setConfirmDeleteFor] = useState<string | null>(null);
+  const [pendingDeleteSession, setPendingDeleteSession] = useState<SessionMeta | null>(null);
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState<GroupedSessions | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState(false);
+  const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showNotice = useCallback((type: 'ok' | 'error', text: string) => {
+    setNotice({ type, text });
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 3200);
+  }, []);
   const [copied, setCopied] = useState(false);
 
   // ── Sidebar resize handling ────────────────────────────────────────
@@ -200,26 +212,91 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
     return sessions.find((s) => `${s.providerId}::${s.sessionId}` === selectedKey) ?? null;
   }, [sessions, selectedKey]);
 
-  // Load messages when session changes
-  useEffect(() => {
-    if (!selectedSession?.sourcePath) return;
+  // Load messages for the selected session
+  const loadMessages = useCallback(async () => {
+    const sp = selectedSession?.sourcePath;
+    if (!sp) return;
     setMessagesLoading(true);
-    setMessages([]);
-    api.getSessionMessages(selectedSession.providerId, selectedSession.sourcePath)
-      .then(setMessages)
-      .catch(console.error)
-      .finally(() => setMessagesLoading(false));
+    try {
+      const list = await api.getSessionMessages(selectedSession.providerId, sp);
+      setMessages(list);
+    } catch (err) {
+      console.error('load messages failed', err);
+    } finally {
+      setMessagesLoading(false);
+    }
   }, [selectedSession?.providerId, selectedSession?.sourcePath]);
 
-  // Load trajectory when tab switches to trajectory
-  useEffect(() => {
-    if (activeTab !== 'trajectory' || !selectedSession?.sourcePath) return;
+  // Load trajectory for the selected session
+  const loadTrajectory = useCallback(async () => {
+    const sp = selectedSession?.sourcePath;
+    if (!sp) return;
     setTrajectoryLoading(true);
-    api.getSessionTrajectory(selectedSession.providerId, selectedSession.sourcePath)
-      .then(setTrajectoryData)
-      .catch(console.error)
-      .finally(() => setTrajectoryLoading(false));
-  }, [activeTab, selectedSession?.providerId, selectedSession?.sourcePath]);
+    try {
+      const data = await api.getSessionTrajectory(selectedSession.providerId, sp);
+      setTrajectoryData(data);
+    } catch (err) {
+      console.error('load trajectory failed', err);
+    } finally {
+      setTrajectoryLoading(false);
+    }
+  }, [selectedSession?.providerId, selectedSession?.sourcePath]);
+
+  // Load messages when the selected session changes
+  useEffect(() => {
+    setMessages([]);
+    loadMessages();
+  }, [loadMessages]);
+
+  // Load trajectory when the tab switches to trajectory
+  useEffect(() => {
+    if (activeTab !== 'trajectory') return;
+    loadTrajectory();
+  }, [activeTab, loadTrajectory]);
+
+  // Refresh the session list periodically so new / updated sessions surface.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      api.listSessions().then(setSessions).catch(console.error);
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Watch the selected session file: when its mtime changes, reload the tab.
+  const mtimeRef = useRef(0);
+  useEffect(() => {
+    const sp = selectedSession?.sourcePath;
+    mtimeRef.current = 0;
+    if (!sp) return;
+    const tick = async () => {
+      try {
+        const m = await api.getSessionMtime(sp);
+        if (mtimeRef.current !== 0 && m !== mtimeRef.current) {
+          if (activeTab === 'trajectory') loadTrajectory();
+          else loadMessages();
+        }
+        mtimeRef.current = m;
+      } catch {
+        // file may be gone — ignore
+      }
+    };
+    void tick();
+    const timer = setInterval(tick, 5000);
+    return () => clearInterval(timer);
+  }, [selectedSession?.sourcePath, activeTab, loadMessages, loadTrajectory]);
+
+  // Manual refresh: session list + current tab.
+  const refreshAll = useCallback(async () => {
+    try {
+      setSessions(await api.listSessions());
+    } catch (err) {
+      console.error('refresh list failed', err);
+    }
+    if (selectedSession?.sourcePath) {
+      if (activeTab === 'trajectory') await loadTrajectory();
+      else await loadMessages();
+    }
+  }, [selectedSession?.sourcePath, activeTab, loadMessages, loadTrajectory]);
 
   const handleSelectSession = useCallback((key: string) => {
     setSelectedKey(key);
@@ -256,16 +333,40 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
 
   const deleteSessionHandler = useCallback(async (session: SessionMeta) => {
     if (!session.sourcePath) return;
-    setConfirmDeleteFor(null);
+    setPendingDeleteSession(null);
     try {
       await api.deleteSession(session.sourcePath);
       const key = `${session.providerId}::${session.sessionId}`;
       setSessions((prev) => prev.filter((s) => `${s.providerId}::${s.sessionId}` !== key));
       setSelectedKey((prev) => (prev === key ? null : prev));
+      showNotice('ok', 'Session deleted');
     } catch (err) {
-      console.error('delete session failed', err);
+      showNotice('error', `Delete failed: ${String(err)}`);
     }
-  }, []);
+  }, [showNotice]);
+
+  // Bulk-delete every conversation in a project group's storage dirs.
+  const confirmDeleteGroup = useCallback(async () => {
+    const group = pendingDeleteGroup;
+    if (!group) return;
+    setDeletingGroup(true);
+    let total = 0;
+    for (const dir of group.storageDirs) {
+      try {
+        total += await api.deleteSessionsInDir(dir);
+      } catch (err) {
+        showNotice('error', `Delete failed: ${String(err)}`);
+      }
+    }
+    try {
+      setSessions(await api.listSessions());
+    } catch (err) {
+      console.error('refresh after group delete failed', err);
+    }
+    setDeletingGroup(false);
+    setPendingDeleteGroup(null);
+    showNotice('ok', total > 0 ? `Deleted ${total} session(s)` : 'Nothing to delete');
+  }, [pendingDeleteGroup, showNotice]);
 
   const copyResume = useCallback(async () => {
     if (!selectedSession) return;
@@ -330,6 +431,13 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                 <span className="text-[10px] opacity-60">{chipIdCount(chip.id)}</span>
               </button>
             ))}
+            <button
+              onClick={refreshAll}
+              title="Refresh sessions"
+              className="ml-auto shrink-0 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            >
+              <RotateCw className="size-3.5" />
+            </button>
           </div>
         </div>
 
@@ -353,12 +461,26 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                     {/* Group header */}
                     <div
                       onClick={() => toggleGroup(group.groupName)}
-                      className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors text-[11px] font-medium text-muted-foreground"
+                      className="group relative flex items-center gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors text-[11px] font-medium text-muted-foreground"
                     >
                       {isExpanded ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
                       {isExpanded ? <FolderOpen className="size-3.5 shrink-0" /> : <Folder className="size-3.5 shrink-0" />}
                       <span className="truncate">{group.groupName}</span>
                       <span className="text-[10px] opacity-60 ml-auto">{group.sessions.length}</span>
+
+                      {/* Bulk-delete: remove all conversations in this project dir */}
+                      <div className="absolute right-0 top-0 bottom-0 pr-1 opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDeleteGroup(group);
+                          }}
+                          title="Delete all conversations in this project"
+                          className="p-1 rounded text-red-500 hover:text-red-600 hover:bg-red-500/10 transition-colors"
+                        >
+                          <Trash2 className="size-3" />
+                        </button>
+                      </div>
                     </div>
 
                     {/* Sessions in group */}
@@ -422,18 +544,12 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (confirmDeleteFor === key) deleteSessionHandler(session);
-                                else setConfirmDeleteFor(key);
+                                setPendingDeleteSession(session);
                               }}
-                              onMouseLeave={() => setConfirmDeleteFor((cur) => (cur === key ? null : cur))}
-                              title={confirmDeleteFor === key ? 'Click again to delete' : 'Delete session'}
-                              className={`p-1 rounded transition-colors ${
-                                confirmDeleteFor === key
-                                  ? 'bg-red-100 dark:bg-red-900/30 text-red-600'
-                                  : 'text-red-500 hover:text-red-600 hover:bg-red-500/10'
-                              }`}
+                              title="Delete this conversation"
+                              className="p-1 rounded text-red-500 hover:text-red-600 hover:bg-red-500/10 transition-colors"
                             >
-                              <Trash2 className={`size-3 ${confirmDeleteFor === key ? 'fill-current' : ''}`} />
+                              <Trash2 className="size-3" />
                             </button>
                           </div>
                         </div>
@@ -579,6 +695,93 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
           </>
         )}
       </main>
+
+      {pendingDeleteGroup && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/30"
+            onClick={() => !deletingGroup && setPendingDeleteGroup(null)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+            <div className="pointer-events-auto w-80 rounded-xl border border-border/40 bg-white dark:bg-gray-900 p-4 shadow-xl">
+              <div className="text-sm font-medium text-red-600 dark:text-red-400">
+                Delete all conversations?
+              </div>
+              <p className="text-xs text-muted-foreground mt-1 break-all">
+                Permanently removes {pendingDeleteGroup.sessions.length} session(s) in{' '}
+                <span className="font-mono text-[10px]">
+                  {pendingDeleteGroup.storageDirs.join(', ')}
+                </span>
+              </p>
+              <div className="flex justify-end gap-2 mt-4">
+                <button
+                  onClick={() => setPendingDeleteGroup(null)}
+                  disabled={deletingGroup}
+                  className="px-3 py-1.5 rounded text-xs border border-border/40 hover:bg-muted/40 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeleteGroup}
+                  disabled={deletingGroup}
+                  className="px-3 py-1.5 rounded text-xs bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-60"
+                >
+                  {deletingGroup ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {pendingDeleteSession && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/30"
+            onClick={() => setPendingDeleteSession(null)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+            <div className="pointer-events-auto w-80 rounded-xl border border-border/40 bg-white dark:bg-gray-900 p-4 shadow-xl">
+              <div className="text-sm font-medium text-red-600 dark:text-red-400">
+                Delete this conversation?
+              </div>
+              <p className="text-xs text-muted-foreground mt-1 break-all">
+                Permanently removes session{' '}
+                <span className="font-mono text-[10px]">{pendingDeleteSession.sessionId}</span>
+                {pendingDeleteSession.title ? ` (${pendingDeleteSession.title})` : ''}
+              </p>
+              <div className="flex justify-end gap-2 mt-4">
+                <button
+                  onClick={() => setPendingDeleteSession(null)}
+                  className="px-3 py-1.5 rounded text-xs border border-border/40 hover:bg-muted/40 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const session = pendingDeleteSession;
+                    setPendingDeleteSession(null);
+                    deleteSessionHandler(session);
+                  }}
+                  className="px-3 py-1.5 rounded text-xs bg-red-600 text-white hover:bg-red-700 transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {notice && (
+        <div
+          className={`fixed top-12 left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-lg text-xs shadow-lg ${
+            notice.type === 'ok' ? 'bg-black/85 text-white' : 'bg-red-600/90 text-white'
+          }`}
+        >
+          {notice.text}
+        </div>
+      )}
     </div>
   );
 }
@@ -597,7 +800,7 @@ function groupByProject(sessions: SessionMeta[], _filter: ProviderFilter): Group
     if (existing) {
       existing.sessions.push(session);
     } else {
-      groups.set(groupName, { groupName, providerId: session.providerId, sessions: [session] });
+      groups.set(groupName, { groupName, providerId: session.providerId, sessions: [session], storageDirs: [] });
     }
   }
 
@@ -614,13 +817,23 @@ function groupByProject(sessions: SessionMeta[], _filter: ProviderFilter): Group
     return bLatest - aLatest;
   });
 
-  // Sort sessions within each group by last_active_at descending
+  // Sort sessions within each group by last_active_at descending, and collect
+  // the backing storage dirs (used by the group's bulk-delete).
   for (const group of result) {
     group.sessions.sort((a, b) => {
       const aTs = a.lastActiveAt ?? a.createdAt ?? 0;
       const bTs = b.lastActiveAt ?? b.createdAt ?? 0;
       return bTs - aTs;
     });
+    const dirs = new Set<string>();
+    for (const s of group.sessions) {
+      if (s.sourcePath) {
+        const p = s.sourcePath.replace(/\\/g, '/');
+        const idx = p.lastIndexOf('/');
+        if (idx > 0) dirs.add(p.slice(0, idx));
+      }
+    }
+    group.storageDirs = [...dirs];
   }
 
   return result;

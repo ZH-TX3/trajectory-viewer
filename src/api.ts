@@ -34,4 +34,14 @@ export const api = {
   async deleteSession(sourcePath: string): Promise<void> {
     return await invoke('delete_session', { sourcePath });
   },
+
+  /** Delete every session file under a managed project directory. */
+  async deleteSessionsInDir(dir: string): Promise<number> {
+    return await invoke('delete_sessions_in_dir', { dir });
+  },
+
+  /** Last-modified ms timestamp of a session file (for change polling). */
+  async getSessionMtime(sourcePath: string): Promise<number> {
+    return await invoke('get_session_mtime', { sourcePath });
+  },
 };

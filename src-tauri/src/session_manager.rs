@@ -756,6 +756,54 @@ pub fn delete_session_file(source_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Collect every session file (JSONL + zstd) under `root`.
+fn collect_session_files(root: &Path, files: &mut Vec<PathBuf>) {
+    collect_jsonl_files_recursive(root, files);
+    collect_zstd_files_recursive(root, files);
+}
+
+/// Remove directories bottom-up (succeeds only when they are empty).
+fn remove_empty_dirs(dir: &Path) {
+    fn walk(p: &Path) {
+        if let Ok(rd) = std::fs::read_dir(p) {
+            for entry in rd.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path);
+                }
+            }
+        }
+        let _ = std::fs::remove_dir(p);
+    }
+    walk(dir);
+}
+
+/// Delete every session file under a managed project directory (all its
+/// conversations), cleaning up now-empty subdirectories.
+pub fn delete_sessions_in_dir(dir: &str) -> Result<usize, String> {
+    let path = Path::new(dir);
+    if !path.is_dir() {
+        return Err("Not a directory".to_string());
+    }
+    let managed = managed_session_dirs();
+    // Allow any directory strictly inside a managed root (project dirs), but
+    // never the managed roots themselves.
+    if !managed.iter().any(|root| path.starts_with(root) && path != root) {
+        return Err("Refusing to delete outside managed session directories".to_string());
+    }
+
+    let mut files = Vec::new();
+    collect_session_files(path, &mut files);
+    let mut deleted = 0;
+    for file in &files {
+        if std::fs::remove_file(file).is_ok() {
+            deleted += 1;
+        }
+    }
+    remove_empty_dirs(path);
+    Ok(deleted)
+}
+
 
 
 

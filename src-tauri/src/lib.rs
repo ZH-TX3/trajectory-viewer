@@ -15,6 +15,8 @@ pub fn run() {
             commands::list_sessions,
             commands::get_session_messages,
             commands::delete_session,
+            commands::delete_sessions_in_dir,
+            commands::get_session_mtime,
         ])
         .run(tauri::generate_context!())
         .expect("error while running trajectory viewer");

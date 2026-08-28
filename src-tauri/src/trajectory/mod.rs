@@ -164,6 +164,17 @@ pub fn detect_provider(path: &Path) -> Result<String, String> {
         ) {
             return Ok("claude".to_string());
         }
+
+        // OpenCode session file: `{id: "ses_...", directory, time: {...}}`.
+        // Checked last so it can't shadow the Claude/Codex/DSH detectors.
+        let opencode_id = json["id"].as_str();
+        let is_opencode = opencode_id.map(|id| id.starts_with("ses_")).unwrap_or(false)
+            && (json["directory"].as_str().is_some()
+                || !json["time"]["created"].is_null()
+                || json["version"].as_str().is_some());
+        if is_opencode {
+            return Ok("opencode".to_string());
+        }
     }
 
     Err("Unable to detect provider. Supported formats: Claude Code, Codex, DSH.".to_string())
@@ -215,6 +226,7 @@ pub fn parse_trajectory(provider_id: &str, source_path: &str) -> Result<Trajecto
         "codex" => parser::codex::parse_trajectory(path)?,
         "dsh" => parser::dsh::parse_trajectory(path)?,
         "claude" => parser::claude::parse_trajectory(path)?,
+        "opencode" => parser::opencode::parse_trajectory(path)?,
         _ => {
             return Err(format!(
                 "Trajectory not yet supported for provider: {provider_id}"

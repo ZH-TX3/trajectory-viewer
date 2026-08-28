@@ -10,7 +10,7 @@ import { api } from './api';
 import type { TrajectoryData } from './types';
 import { ArrowLeft, FileText, Settings } from 'lucide-react';
 
-const AVAILABLE_PROVIDERS = ['claude', 'codex', 'dsh'] as const;
+const AVAILABLE_PROVIDERS = ['claude', 'codex', 'dsh', 'opencode'] as const;
 const SETTINGS_KEY = 'trajectory-viewer.providers.enabled-v1';
 
 /** Enabled session providers, persisted locally. Defaults to all supported. */

@@ -40,7 +40,7 @@ trajectory-viewer/
 │       ├── main.rs               # Binary entry point
 │       ├── lib.rs                # Tauri app builder + command registration
 │       ├── commands.rs           # Tauri commands (4 total)
-│       ├── session_manager.rs    # Session scanning + message loading (3 providers)
+│       ├── session_manager.rs    # Session scanning + message loading (4 providers)
 │       └── trajectory/
 │           ├── mod.rs            # Data model (TrajectoryData, TrajectoryEvent, ContentBlock)
 │           │                     # + provider detection (claude/codex/dsh) + parse dispatch
@@ -49,7 +49,8 @@ trajectory-viewer/
 │               ├── mod.rs        # Parser module declarations
 │               ├── claude.rs     # Claude Code JSONL parser (5 tests)
 │               ├── codex.rs      # Codex JSONL parser (4 tests)
-│               └── dsh.rs        # DSH zstd-compressed JSONL parser (3 tests)
+│               ├── dsh.rs        # DSH zstd-compressed JSONL parser (3 tests)
+│               └── opencode.rs   # OpenCode JSON files + SQLite parser (5 tests)
 │
 ├── src/                          # Frontend (React + TypeScript + Tailwind)
 │   ├── main.tsx                  # React entry point
@@ -79,6 +80,7 @@ trajectory-viewer/
 | Claude Code | Plain JSONL | `~/.claude/projects/{project}/{sessionId}.jsonl` | `sessionId` field or `message.role` |
 | Codex | Plain JSONL | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `type: "response_item"` |
 | DSH | Zstd-compressed JSONL | `~/.dsh/sessions/{project}/{sessionId}/session.jsonl.zstd` | `type: "session"` or `"user/message"` |
+| OpenCode | JSON files + SQLite | `~/.local/share/opencode/{storage,opencode.db}` | session file `id: "ses_*"` or `sqlite:` ref |
 
 ### Key Design Decisions
 

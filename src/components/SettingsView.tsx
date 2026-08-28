@@ -16,7 +16,7 @@ const PROVIDER_OPTIONS: Array<{ id: string; label: string; description: string; 
   { id: 'claude', label: 'Claude Code', description: 'Scans ~/.claude/projects', supported: true },
   { id: 'codex', label: 'Codex', description: 'Scans ~/.codex/sessions', supported: true },
   { id: 'dsh', label: 'DSH', description: 'Scans ~/.dsh/sessions', supported: true },
-  { id: 'opencode', label: 'OpenCode', description: 'Not yet supported', supported: false },
+  { id: 'opencode', label: 'OpenCode', description: 'Scans ~/.local/share/opencode', supported: true },
 ];
 
 export function SettingsView({ enabledProviders, onToggleProvider, onBack }: SettingsViewProps) {

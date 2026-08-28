@@ -74,6 +74,9 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
         }
     }
 
+    // OpenCode: JSON storage files + SQLite database (deduplicated inside).
+    sessions.extend(crate::trajectory::parser::opencode::scan_sessions());
+
     // Sort by last_active_at descending
     sessions.sort_by(|a, b| {
         let a_ts = a.last_active_at.or(a.created_at).unwrap_or(0);
@@ -91,6 +94,7 @@ pub fn load_messages(provider_id: &str, source_path: &str) -> Result<Vec<Session
         "claude" => load_claude_messages(path),
         "codex" => load_codex_messages(path),
         "dsh" => crate::trajectory::parser::dsh::load_messages(path),
+        "opencode" => crate::trajectory::parser::opencode::load_messages(source_path),
         _ => Err(format!("Unsupported provider: {provider_id}")),
     }
 }
@@ -755,15 +759,24 @@ fn truncate(text: &str, max_chars: usize) -> String {
 
 /// Directories we allow session deletion from.
 fn managed_session_dirs() -> Vec<PathBuf> {
-    [claude_projects_dir(), codex_sessions_dir(), dsh_sessions_dir()]
+    let mut dirs: Vec<PathBuf> = [claude_projects_dir(), codex_sessions_dir(), dsh_sessions_dir()]
         .into_iter()
         .flatten()
-        .collect()
+        .collect();
+    if let Some(opencode_base) = crate::trajectory::parser::opencode::get_opencode_base_dir() {
+        dirs.push(opencode_base);
+    }
+    dirs
 }
 
 /// Delete a session file directly (plus its now-empty parent directory for the
 /// DSH `{session-id}/` layout). Refuses anything outside the managed dirs.
 pub fn delete_session_file(source_path: &str) -> Result<(), String> {
+    // OpenCode sessions (SQLite reference or session JSON under storage/).
+    if crate::trajectory::parser::opencode::is_opencode_source(source_path) {
+        return crate::trajectory::parser::opencode::delete_session(source_path);
+    }
+
     let path = Path::new(source_path);
     let ext = path
         .extension()
@@ -812,6 +825,12 @@ pub fn delete_sessions_in_dir(dir: &str) -> Result<usize, String> {
     if !path.is_dir() {
         return Err("Not a directory".to_string());
     }
+
+    // OpenCode project session directory (storage/session/{project}/).
+    if crate::trajectory::parser::opencode::is_session_store_dir(path) {
+        return crate::trajectory::parser::opencode::delete_sessions_in_dir(path);
+    }
+
     let managed = managed_session_dirs();
     // Allow any directory strictly inside a managed root (project dirs), but
     // never the managed roots themselves.

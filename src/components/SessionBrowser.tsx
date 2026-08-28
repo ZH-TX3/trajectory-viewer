@@ -4,7 +4,7 @@
 // Right panel: Messages/Trajectory tabs.
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { ReactNode } from 'react';
+import type { FC } from 'react';
 import { api } from '../api';
 import { TrajectoryView } from './TrajectoryView';
 import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
@@ -40,7 +40,7 @@ function resumeCommandFor(session: SessionMeta | null): string {
 const PROVIDER_CHIPS: Array<{
   id: Exclude<ProviderFilter, 'all'>;
   label: string;
-  icon: (props: { className?: string }) => ReactNode;
+  icon: FC<{ className?: string }>;
   active: string;
 }> = [
   { id: 'claude', label: 'Claude', icon: ClaudeIcon, active: 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 shadow-sm' },
@@ -300,7 +300,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
 
   const handleSelectSession = useCallback((key: string) => {
     setSelectedKey(key);
-    setActiveTab('messages');
+    // Keep the current tab (Messages / Trajectory) across session switches.
     setTrajectoryData(null);
   }, []);
 
@@ -469,7 +469,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                       <span className="text-[10px] opacity-60 ml-auto">{group.sessions.length}</span>
 
                       {/* Bulk-delete: remove all conversations in this project dir */}
-                      <div className="absolute right-0 top-0 bottom-0 pr-1 opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+                      <div className="absolute right-4 top-0 bottom-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -652,15 +652,23 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                 ) : messages.length === 0 ? (
                   <div className="text-xs text-muted-foreground text-center pt-8">No messages</div>
                 ) : (
-                  messages.map((msg, i) => (
+                  messages.map((msg, i) => {
+                    // Injected workspace/system reminders are user-role payloads;
+                    // surface them as "system" like DSH does.
+                    const role =
+                      msg.role === 'user' && msg.content.includes('<system-reminder>')
+                        ? 'system'
+                        : msg.role;
+                    return (
                     <div key={i} className="flex gap-3">
                       <div className={`
                         shrink-0 w-16 text-[10px] font-mono text-right pt-1
-                        ${msg.role === 'user' ? 'text-emerald-600 dark:text-emerald-400' : ''}
-                        ${msg.role === 'assistant' ? 'text-violet-600 dark:text-violet-400' : ''}
-                        ${msg.role === 'tool' ? 'text-amber-600 dark:text-amber-400' : ''}
+                        ${role === 'system' ? 'text-cyan-600 dark:text-cyan-400' : ''}
+                        ${role === 'user' ? 'text-emerald-600 dark:text-emerald-400' : ''}
+                        ${role === 'assistant' ? 'text-violet-600 dark:text-violet-400' : ''}
+                        ${role === 'tool' ? 'text-amber-600 dark:text-amber-400' : ''}
                       `}>
-                        {msg.role}
+                        {role}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-xs text-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
@@ -671,7 +679,8 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                         )}
                       </div>
                     </div>
-                  ))
+                    );
+                  })
                 )}
                 </div>
               </div>

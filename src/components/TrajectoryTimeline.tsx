@@ -67,9 +67,9 @@ function rangeFraction(
 function LaneLabels() {
   return (
     <div className="w-11 shrink-0 border-r border-border/40 relative text-[9px] text-muted-foreground leading-none">
-      <span className="absolute right-1 top-[7px]">Input</span>
-      <span className="absolute right-1 top-[21px]">Model</span>
-      <span className="absolute right-1 top-[35px]">Tools</span>
+      <span className="absolute right-1 top-[6px]">Input</span>
+      <span className="absolute right-1 top-[23px]">Model</span>
+      <span className="absolute right-1 top-[40px]">Tools</span>
     </div>
   );
 }
@@ -405,7 +405,7 @@ export function TrajectoryTimeline({
             .map((boundary) => (
               <div
                 key={`turn-${boundary.turn}`}
-                className="absolute top-0 bottom-0 w-px bg-border/40 pointer-events-none"
+                className="absolute top-0 bottom-0 w-px bg-border/15 pointer-events-none"
                 style={{ left: `${((boundary.time - model.start) / fullDuration) * 100}%` }}
               />
             ))}
@@ -431,23 +431,26 @@ export function TrajectoryTimeline({
                 data-hovered={hovered ? 'true' : undefined}
                 data-current={activeSelected ? 'true' : undefined}
                 className={cn(
-                  'absolute h-2.5 rounded-sm pointer-events-auto',
-                  span.kind === 'user' && 'bg-emerald-400 dark:bg-emerald-500',
-                  span.kind === 'message' && 'bg-violet-400 dark:bg-violet-500',
-                  (span.kind === 'tool' || span.kind === 'subtool') && 'bg-amber-400 dark:bg-amber-500',
-                  span.kind === 'system' && 'bg-gray-400 dark:bg-gray-500',
-                  span.kind === 'compacted' && 'bg-gray-300 dark:bg-gray-600',
+                  'absolute h-2 rounded-sm pointer-events-auto',
+                  span.kind === 'user' && !span.isError && 'bg-blue-400 dark:bg-blue-500',
+                  span.kind === 'context' && !span.isError && 'bg-green-400 dark:bg-green-500',
+                  span.kind === 'message' && !span.isError && 'bg-violet-400 dark:bg-violet-500',
+                  (span.kind === 'tool' || span.kind === 'subtool') && !span.isError && 'bg-amber-400 dark:bg-amber-500',
+                  span.kind === 'system' && !span.isError && 'bg-gray-400 dark:bg-gray-500',
+                  span.kind === 'compacted' && !span.isError && 'bg-gray-300 dark:bg-gray-600',
+                  span.isError && 'bg-red-400 dark:bg-red-500',
                   dimmed && 'opacity-[0.2]',
                   selected && 'opacity-100',
                   highlighted && 'opacity-100',
-                  span.isError && !highlighted && 'ring-1 ring-red-400',
-                  hovered && 'ring-2 ring-blue-400/70 dark:ring-blue-300/80',
-                  activeSelected && 'ring-2 ring-blue-500/80 dark:ring-blue-400/80',
+                  hovered && 'ring-1 ring-blue-400/40 dark:ring-blue-300/50',
+                  activeSelected && 'ring-1 ring-blue-500/50 dark:ring-blue-400/50',
                 )}
                 style={{
                   left: `${((span.start - model.start) / fullDuration) * 100}%`,
-                  width: `${Math.max(((span.end - span.start) / fullDuration) * 100, 0.5)}%`,
-                  top: `${span.lane * 16 + 1}px`,
+                  width: `${Math.max(((span.end - span.start) / fullDuration) * 100 - 0.35, 0.5)}%`,
+                  minWidth: 2,
+                  marginRight: 1,
+                  top: `${span.lane * 17 + 1}px`,
                 }}
                 onPointerEnter={() => setHover({ fraction: hover?.fraction ?? 0, recordIndex: span.index })}
                 onPointerLeave={() => setHover(null)}

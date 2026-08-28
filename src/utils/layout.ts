@@ -101,7 +101,10 @@ function withDerivedTurnStep(events: readonly TrajectoryEvent[]): TrajectoryEven
   let step = 0;
 
   return events.map((event) => {
-    if (event.eventType === 'user-message') {
+    // Injected system reminders don't start a new turn.
+    const isInjectedContext =
+      event.eventType === 'user-message' && event.content?.includes('<system-reminder>') === true;
+    if (event.eventType === 'user-message' && !isInjectedContext) {
       turn += 1;
       step = 0;
     } else if (event.eventType === 'tool-call' && turn > 0 && step === 0) {
@@ -175,6 +178,9 @@ function eventToCell(
 
   switch (event.eventType) {
     case 'user-message':
+      // Claude Code injects workspace/system reminders as user messages —
+      // render those as context (green) rather than a regular user turn.
+      const isContext = event.content?.includes('<system-reminder>') === true;
       return {
         index,
         sourceSeq: event.seq,
@@ -190,10 +196,10 @@ function eventToCell(
         output: event.outputTokens ?? undefined,
         cacheRead: event.cacheReadTokens ?? undefined,
         cacheWrite: event.cacheWriteTokens ?? undefined,
-        kind: 'user',
+        kind: isContext ? 'context' : 'user',
         text: truncateContent(event.content, 120),
         previewMarkdown: event.content,
-        opensTurn: true,
+        opensTurn: !isContext,
         sourceBlocks: contentBlocksToSourceBlocks(event.contentBlocks ?? undefined),
       } as TrajectoryCellProps;
 
@@ -362,6 +368,15 @@ export interface VirtualRow {
 }
 
 const CONTENT_ROW_HEIGHT = 30;
+
+/**
+ * Collapsed-turn summary label, DSH summarizeTurn(): "N steps · M tool calls".
+ */
+export function summarizeTurnText(stepCount: number, toolCallCount: number): string {
+  const steps = `${stepCount} ${stepCount === 1 ? 'step' : 'steps'}`;
+  const calls = `${toolCallCount} tool ${toolCallCount === 1 ? 'call' : 'calls'}`;
+  return `${steps} · ${calls}`;
+}
 
 /**
  * Group records into measurable virtual rows.

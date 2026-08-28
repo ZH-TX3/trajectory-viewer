@@ -19,7 +19,7 @@ import {
   KIND_LABEL,
 } from '../utils/format';
 import { cn } from '../lib/utils';
-import { X } from 'lucide-react';
+import { X, ChevronRight } from 'lucide-react';
 
 interface TrajectoryDetailProps {
   cell: TrajectoryCellProps;
@@ -132,12 +132,12 @@ function OverviewSection({
         type="button"
         onClick={onOpen}
         className={cn(
-          'w-full text-left text-[11px] text-muted-foreground flex items-center justify-between py-1',
-          onOpen && 'hover:text-foreground transition-colors',
+          'w-full text-left text-[11px] text-muted-foreground flex items-center justify-between py-1 border-y border-border/10',
+          onOpen && 'hover:text-foreground hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors',
         )}
       >
         <span>{label}</span>
-        {onOpen && <span className="text-foreground/40 group-hover:text-foreground">›</span>}
+        {onOpen && <ChevronRight className="size-3.5 text-foreground/40 group-hover:text-foreground shrink-0" aria-hidden />}
       </button>
       {children}
     </div>

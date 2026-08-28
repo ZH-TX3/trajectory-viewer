@@ -572,16 +572,25 @@ fn dsh_project_group(path: &Path) -> Option<String> {
 fn parse_dsh_session(path: &Path) -> Option<SessionMeta> {
     use std::io::Read;
 
-    // Decompress just enough to get the session metadata line
+    // Read a bounded prefix of the decompressed stream — session titles are
+    // generated early, so the first ~1MB is enough.
     let mut file = std::fs::File::open(path).ok()?;
     let mut compressed = Vec::new();
     file.read_to_end(&mut compressed).ok()?;
 
     let mut decompressed = Vec::new();
     let mut decoder = zstd::Decoder::new(std::io::Cursor::new(&compressed)).ok()?;
-    let mut buf = [0u8; 4096];
-    let n = decoder.read(&mut buf).ok()?;
-    decompressed.extend_from_slice(&buf[..n]);
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = decoder.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        decompressed.extend_from_slice(&buf[..n]);
+        if decompressed.len() >= 1_048_576 {
+            break;
+        }
+    }
 
     let text = std::str::from_utf8(&decompressed).ok()?;
     let first_line = text.lines().next()?;
@@ -591,31 +600,49 @@ fn parse_dsh_session(path: &Path) -> Option<SessionMeta> {
     let created_at = value["createdAt"].as_i64();
     let project_dir = value["cwd"].as_str().map(|s| s.to_string());
 
-    // Look for user/message to get title
+    // Title: latest `session/title` event (LLM-generated), falling back to the
+    // first real user message.
     let mut title: Option<String> = None;
-    for line in text.lines().skip(1).take(10) {
-        let v: serde_json::Value = serde_json::from_str(line).ok()?;
-        if v["type"].as_str() == Some("user/message") {
-            if let Some(content) = v["data"]["content"].as_array() {
-                for item in content {
-                    if let Some(text) = item["text"].as_str() {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() && !trimmed.starts_with('<') {
-                            title = Some(trimmed.to_string());
-                            break;
+    let mut first_user: Option<String> = None;
+    for line in text.lines().skip(1) {
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match v["type"].as_str() {
+            Some("session/title") => {
+                if let Some(t) = v["data"]["title"]
+                    .as_str()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                {
+                    title = Some(t);
+                }
+            }
+            Some("user/message") => {
+                if first_user.is_none() {
+                    if let Some(content) = v["data"]["content"].as_array() {
+                        for item in content {
+                            if let Some(t) = item["text"]
+                                .as_str()
+                                .map(|s| s.trim())
+                                .filter(|s| !s.is_empty() && !s.starts_with('<'))
+                            {
+                                first_user = Some(t.to_string());
+                                break;
+                            }
                         }
                     }
                 }
             }
-            if title.is_some() {
-                break;
-            }
+            _ => {}
         }
     }
+    let title = title.or(first_user);
 
     Some(SessionMeta {
         provider_id: "dsh".to_string(),
-        session_id,
+        session_id: session_id.clone(),
         title: title.map(|t| truncate(&t, 80)),
         summary: None,
         project_dir,
@@ -623,7 +650,7 @@ fn parse_dsh_session(path: &Path) -> Option<SessionMeta> {
         created_at,
         last_active_at: created_at,
         source_path: Some(path.to_string_lossy().to_string()),
-        resume_command: None,
+        resume_command: Some(format!("dsh-tui --resume {session_id}")),
     })
 }
 
@@ -803,6 +830,7 @@ pub fn delete_sessions_in_dir(dir: &str) -> Result<usize, String> {
     remove_empty_dirs(path);
     Ok(deleted)
 }
+
 
 
 

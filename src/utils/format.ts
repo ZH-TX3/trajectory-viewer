@@ -82,6 +82,7 @@ export function formatThroughput(tokens: number | null, seconds: number | null):
  * Build a compact one-line preview from Markdown text.
  */
 export function trajectoryPreviewText(text: string): string {
+  if (text == null) return '';
   const source = text.slice(0, 2048);
   const compact = source
     .replace(/```[\s\S]*?```/g, '[code]')

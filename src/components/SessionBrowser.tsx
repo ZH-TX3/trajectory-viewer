@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { FC } from 'react';
 import { api } from '../api';
 import { TrajectoryView } from './TrajectoryView';
+import { TrajectoryErrorBoundary } from './TrajectoryErrorBoundary';
 import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import {
   MessageSquare, GitBranch, Clock, FileText, Loader2,
@@ -46,6 +47,7 @@ const PROVIDER_CHIPS: Array<{
   { id: 'claude', label: 'Claude', icon: ClaudeIcon, active: 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 shadow-sm' },
   { id: 'codex', label: 'Codex', icon: CodexIcon, active: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 shadow-sm' },
   { id: 'dsh', label: 'DSH', icon: DshIcon, active: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 shadow-sm' },
+  { id: 'opencode', label: 'OpenCode', icon: OpenCodeIcon, active: 'bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 shadow-sm' },
 ];
 
 interface SessionBrowserProps {
@@ -54,7 +56,10 @@ interface SessionBrowserProps {
 }
 
 type Tab = 'messages' | 'trajectory';
-type ProviderFilter = 'all' | 'claude' | 'codex' | 'dsh';
+type ProviderFilter = 'all' | 'claude' | 'codex' | 'dsh' | 'opencode';
+
+// Display order of providers in the sidebar.
+const PROVIDER_ORDER = ['claude', 'codex', 'dsh', 'opencode'];
 
 // ── Provider Icons ───────────────────────────────────────────────────────
 
@@ -85,6 +90,16 @@ function DshIcon({ className }: { className?: string }) {
       <rect x="6" y="6" width="20" height="20" rx="4" fill="currentColor" opacity="0.12" />
       <path d="M10 16l4-4 4 4-4 4-4-4z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
       <path d="M18 18h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function OpenCodeIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <circle cx="16" cy="16" r="14" fill="currentColor" opacity="0.12" />
+      <rect x="10" y="10" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="16" cy="16" r="2" fill="currentColor" />
     </svg>
   );
 }
@@ -397,14 +412,23 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
   const providerIcon = (id: string) => {
     return id === 'claude' ? 'text-violet-600 dark:text-violet-400'
       : id === 'dsh' ? 'text-amber-600 dark:text-amber-400'
+      : id === 'opencode' ? 'text-sky-600 dark:text-sky-400'
       : 'text-emerald-600 dark:text-emerald-400';
+  };
+
+  const providerGlyph = (id: string, size = 'size-3.5') => {
+    if (id === 'claude') return <ClaudeIcon className={size} />;
+    if (id === 'dsh') return <DshIcon className={size} />;
+    if (id === 'opencode') return <OpenCodeIcon className={size} />;
+    return <CodexIcon className={size} />;
   };
 
   const claudeCount = sessions.filter((s) => s.providerId === 'claude').length;
   const codexCount = sessions.filter((s) => s.providerId === 'codex').length;
   const dshCount = sessions.filter((s) => s.providerId === 'dsh').length;
+  const opencodeCount = sessions.filter((s) => s.providerId === 'opencode').length;
   const chipIdCount = (id: string) =>
-    id === 'claude' ? claudeCount : id === 'codex' ? codexCount : dshCount;
+    id === 'claude' ? claudeCount : id === 'codex' ? codexCount : id === 'dsh' ? dshCount : opencodeCount;
 
   return (
     <div className="flex h-full min-h-0">
@@ -501,7 +525,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                         >
                           {/* Provider icon */}
                           <div className={`shrink-0 mt-0.5 ${providerIcon(session.providerId)}`}>
-                            {session.providerId === 'claude' ? <ClaudeIcon className="size-3.5" /> : session.providerId === 'dsh' ? <DshIcon className="size-3.5" /> : <CodexIcon className="size-3.5" />}
+                            {providerGlyph(session.providerId)}
                           </div>
 
                           <div className="flex-1 min-w-0">
@@ -595,7 +619,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
             {/* Session header */}
             <div className="h-10 border-b border-border/40 flex items-center gap-2 px-3 shrink-0 bg-background/95">
               <div className={`${providerIcon(selectedSession.providerId)}`}>
-                {selectedSession.providerId === 'claude' ? <ClaudeIcon className="size-4" /> : selectedSession.providerId === 'dsh' ? <DshIcon className="size-4" /> : <CodexIcon className="size-4" />}
+                {providerGlyph(selectedSession.providerId, 'size-4')}
               </div>
               <span className="text-xs font-medium truncate">{sessionTitle(selectedSession)}</span>
 
@@ -693,7 +717,9 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                     <Loader2 className="size-3 animate-spin mr-2" />Loading trajectory…
                   </div>
                 ) : trajectoryData ? (
-                  <TrajectoryView data={trajectoryData} />
+                  <TrajectoryErrorBoundary>
+                    <TrajectoryView data={trajectoryData} />
+                  </TrajectoryErrorBoundary>
                 ) : (
                   <div className="flex items-center justify-center h-20 text-xs text-muted-foreground">
                     No trajectory data available
@@ -803,7 +829,7 @@ function groupByProject(sessions: SessionMeta[], _filter: ProviderFilter): Group
   for (const session of sessions) {
     const groupName = session.projectGroup
       ?? session.projectDir
-      ?? (session.providerId === 'claude' ? 'Claude Code' : session.providerId === 'dsh' ? 'DSH' : 'Codex');
+      ?? (session.providerId === 'claude' ? 'Claude Code' : session.providerId === 'dsh' ? 'DSH' : session.providerId === 'opencode' ? 'OpenCode' : 'Codex');
 
     const existing = groups.get(groupName);
     if (existing) {
@@ -813,12 +839,14 @@ function groupByProject(sessions: SessionMeta[], _filter: ProviderFilter): Group
     }
   }
 
-  // Sort: Claude groups first, then Codex groups; within each, by latest session
+  // Sort: providers in a fixed display order, then each group by latest session.
   const result = Array.from(groups.values());
   result.sort((a, b) => {
     // Sort by provider first
     if (a.providerId !== b.providerId) {
-      return a.providerId === 'claude' ? -1 : 1;
+      const ia = PROVIDER_ORDER.indexOf(a.providerId);
+      const ib = PROVIDER_ORDER.indexOf(b.providerId);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
     }
     // Within same provider, sort by latest session
     const aLatest = Math.max(...a.sessions.map((s) => s.lastActiveAt ?? s.createdAt ?? 0));
@@ -836,7 +864,8 @@ function groupByProject(sessions: SessionMeta[], _filter: ProviderFilter): Group
     });
     const dirs = new Set<string>();
     for (const s of group.sessions) {
-      if (s.sourcePath) {
+      // SQLite-backed OpenCode sessions have no directory to sweep.
+      if (s.sourcePath && !s.sourcePath.startsWith('sqlite:')) {
         const p = s.sourcePath.replace(/\\/g, '/');
         const idx = p.lastIndexOf('/');
         if (idx > 0) dirs.add(p.slice(0, idx));

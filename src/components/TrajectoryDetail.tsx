@@ -47,9 +47,9 @@ interface TabDef {
 /** Whether a record has renderable preview content (Markdown / result). */
 function hasPreview(cell: TrajectoryCellProps): boolean {
   return (
-    cell.previewMarkdown !== undefined ||
-    cell.resultPreviewMarkdown !== undefined ||
-    cell.result !== undefined
+    cell.previewMarkdown != null ||
+    cell.resultPreviewMarkdown != null ||
+    cell.result != null
   );
 }
 

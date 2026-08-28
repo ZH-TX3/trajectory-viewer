@@ -610,16 +610,15 @@ function sameSources(left: readonly string[], right: readonly string[]): boolean
 }
 
 function markdownPreview(cell: TrajectoryCellProps): string {
-  if (cell.previewMarkdown === undefined) return '';
+  if (cell.previewMarkdown == null) return '';
   const preview = trajectoryPreviewText(cell.previewMarkdown);
   if (cell.text === '') return preview;
   return preview === '' ? cell.text : `${cell.text} · ${preview}`;
 }
 
 function resultPreview(cell: TrajectoryCellProps): string {
-  return cell.resultPreviewMarkdown === undefined
-    ? cell.result ?? ''
-    : trajectoryPreviewText(cell.resultPreviewMarkdown);
+  if (cell.resultPreviewMarkdown == null) return cell.result ?? '';
+  return trajectoryPreviewText(cell.resultPreviewMarkdown);
 }
 
 function recordSources(

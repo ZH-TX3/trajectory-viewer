@@ -92,6 +92,6 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Trajectory Viewer ${{ github.ref_name }}'
           releaseBody: 'See the assets to download and install this build.'
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

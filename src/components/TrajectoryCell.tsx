@@ -64,14 +64,17 @@ const KIND_COLOR: Record<string, string> = {
   subtool: 'text-amber-500 dark:text-amber-300',
 };
 
-// Horizontal indent per record kind — tools nest below the assistant message.
+// Label anchor: every row right-aligns its icon+label toward the content
+// column. KIND_INDENT is the gap between the label's right edge and the
+// content column — the same value for one level (so USER / ASSISTANT end at
+// the same line), and smaller for deeper levels (tools hug the text).
 const KIND_INDENT: Record<string, number> = {
-  system: 8,
-  user: 8,
-  context: 8,
-  message: 28,
-  tool: 44,
-  subtool: 56,
+  system: 4,
+  user: 4,
+  context: 4,
+  message: 4,
+  tool: 4,
+  subtool: 4,
 };
 
 interface TrajectoryCellPropsExtra extends TrajectoryCellProps {
@@ -155,22 +158,17 @@ export function TrajectoryCell({
             aria-hidden
           />
         )}
-        <div className="flex items-center gap-1 text-xs pt-1">
+        <div className="flex items-center justify-end gap-1 text-xs pt-1">
           {isSummary ? (
             <span className="text-muted-foreground/50">…</span>
           ) : (
-            <>
-              <span className="text-muted-foreground font-mono text-[10px] w-6 text-right shrink-0">
-                {/* #{index} — hidden, not very useful */}
-              </span>
-              <span
-                className={cn('inline-flex items-center gap-0.5 shrink-0 font-normal', colorClass)}
-                style={{ paddingLeft: KIND_INDENT[kind] ?? 0 }}
-              >
-                {icon && <span className="shrink-0">{icon}</span>}
-                <span className="truncate max-w-[5rem]">{label}</span>
-              </span>
-            </>
+            <span
+              style={{ width: 100, paddingRight: KIND_INDENT[kind] ?? 0 }}
+              className={cn('flex items-center justify-end gap-0.5 shrink-0 min-w-0 font-normal', colorClass)}
+            >
+              {icon && <span className="shrink-0">{icon}</span>}
+              <span className="truncate min-w-0">{label}</span>
+            </span>
           )}
         </div>
       </td>

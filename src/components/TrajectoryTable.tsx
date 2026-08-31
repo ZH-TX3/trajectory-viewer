@@ -260,9 +260,9 @@ export function TrajectoryTable({
     <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* Table pane */}
       <div ref={tablePaneRef} className="flex-1 overflow-auto relative" style={{ minWidth: 0 }}>
-        <table className="w-full border-collapse">
+        <table className="w-full border-collapse table-fixed">
           <colgroup>
-            <col className="w-28" />
+            <col className="w-[120px]" />
             <col />
           </colgroup>
           <tbody>
@@ -290,9 +290,9 @@ export function TrajectoryTable({
                           transform: `translateY(${virtualItem.start}px)`,
                         }}
                       >
-                        <table className="w-full h-full border-collapse">
+                        <table className="w-full h-full border-collapse table-fixed">
                           <colgroup>
-                            <col className="w-28" />
+                            <col className="w-[120px]" />
                             <col />
                           </colgroup>
                           <tbody>

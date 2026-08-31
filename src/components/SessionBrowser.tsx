@@ -53,13 +53,12 @@ const PROVIDER_CHIPS: Array<{
 interface SessionBrowserProps {
   onOpenFile: () => void;
   enabledProviders: ReadonlySet<string>;
+  /** Provider display order (from settings drag-reorder). */
+  providerOrder: readonly string[];
 }
 
 type Tab = 'messages' | 'trajectory';
 type ProviderFilter = 'all' | 'claude' | 'codex' | 'dsh' | 'opencode';
-
-// Display order of providers in the sidebar.
-const PROVIDER_ORDER = ['claude', 'codex', 'dsh', 'opencode'];
 
 // ── Provider Icons ───────────────────────────────────────────────────────
 
@@ -114,7 +113,7 @@ interface GroupedSessions {
   storageDirs: string[];
 }
 
-export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserProps) {
+export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = ['claude', 'codex', 'dsh', 'opencode'] }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -179,7 +178,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
       .then((list) => {
         setSessions(list);
         // Auto-expand first group
-        const groups = groupByProject(list, 'all');
+        const groups = groupByProject(list, 'all', providerOrder);
         if (groups.length > 0) {
           setExpandedGroups(new Set([groups[0].groupName]));
           setSelectedKey(`${groups[0].sessions[0].providerId}::${groups[0].sessions[0].sessionId}`);
@@ -198,8 +197,8 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
 
   // Group by project directory
   const groupedSessions = useMemo(() => {
-    return groupByProject(filteredSessions, providerFilter);
-  }, [filteredSessions, providerFilter]);
+    return groupByProject(filteredSessions, providerFilter, providerOrder);
+  }, [filteredSessions, providerFilter, providerOrder]);
 
   // Auto-select when filter changes
   useEffect(() => {
@@ -423,12 +422,38 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
     return <CodexIcon className={size} />;
   };
 
+  // Filter chips follow the settings-defined display order.
+  const orderedChips = useMemo(() => {
+    const byId = new Map<string, (typeof PROVIDER_CHIPS)[number]>(
+      PROVIDER_CHIPS.map((chip) => [chip.id, chip]),
+    );
+    return providerOrder
+      .map((id) => byId.get(id))
+      .filter((chip): chip is (typeof PROVIDER_CHIPS)[number] => chip !== undefined);
+  }, [providerOrder]);
+
   const claudeCount = sessions.filter((s) => s.providerId === 'claude').length;
   const codexCount = sessions.filter((s) => s.providerId === 'codex').length;
   const dshCount = sessions.filter((s) => s.providerId === 'dsh').length;
   const opencodeCount = sessions.filter((s) => s.providerId === 'opencode').length;
   const chipIdCount = (id: string) =>
     id === 'claude' ? claudeCount : id === 'codex' ? codexCount : id === 'dsh' ? dshCount : opencodeCount;
+
+  // The provider filter bar scrolls horizontally when it overflows; remap the
+  // vertical wheel into horizontal scrolling there (like a scroll-tab bar).
+  const filterBarRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = filterBarRef.current;
+    if (el === null) return;
+    const onWheel = (event: WheelEvent) => {
+      if (el.scrollWidth > el.clientWidth) {
+        event.preventDefault();
+        el.scrollLeft += event.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
   return (
     <div className="flex h-full min-h-0">
@@ -438,9 +463,9 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
         style={{ width: sidebarWidth }}
       >
         {/* Provider filter icons */}
-        <div className="border-b border-border/40">
-          <div className="flex items-center gap-1 px-2 py-1.5 overflow-x-auto">
-            {PROVIDER_CHIPS.filter((chip) => enabledProviders.has(chip.id)).map((chip) => (
+        <div className="relative border-b border-border/40">
+          <div ref={filterBarRef} className="flex items-center gap-1 px-2 py-1.5 overflow-x-auto pr-9">
+            {orderedChips.filter((chip) => enabledProviders.has(chip.id)).map((chip) => (
               <button
                 key={chip.id}
                 onClick={() => setProviderFilter(chip.id)}
@@ -455,14 +480,16 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
                 <span className="text-[10px] opacity-60">{chipIdCount(chip.id)}</span>
               </button>
             ))}
-            <button
-              onClick={refreshAll}
-              title="Refresh sessions"
-              className="ml-auto shrink-0 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-            >
-              <RotateCw className="size-3.5" />
-            </button>
           </div>
+          {/* Floating refresh — a sibling of the scroll container, so it is
+              pinned to the visible right edge and never scrolls with the chips. */}
+          <button
+            onClick={refreshAll}
+            title="Refresh sessions"
+            className="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 bg-muted/80 shadow-sm backdrop-blur-sm transition-colors"
+          >
+            <RotateCw className="size-3.5" />
+          </button>
         </div>
 
         {/* Grouped session list */}
@@ -823,7 +850,11 @@ export function SessionBrowser({ onOpenFile, enabledProviders }: SessionBrowserP
 
 // ── Grouping helper ──────────────────────────────────────────────────────
 
-function groupByProject(sessions: SessionMeta[], _filter: ProviderFilter): GroupedSessions[] {
+function groupByProject(
+  sessions: SessionMeta[],
+  _filter: ProviderFilter,
+  order: readonly string[],
+): GroupedSessions[] {
   const groups = new Map<string, GroupedSessions>();
 
   for (const session of sessions) {
@@ -839,13 +870,13 @@ function groupByProject(sessions: SessionMeta[], _filter: ProviderFilter): Group
     }
   }
 
-  // Sort: providers in a fixed display order, then each group by latest session.
+  // Sort: providers in the user-defined display order, then each group by latest session.
   const result = Array.from(groups.values());
   result.sort((a, b) => {
     // Sort by provider first
     if (a.providerId !== b.providerId) {
-      const ia = PROVIDER_ORDER.indexOf(a.providerId);
-      const ib = PROVIDER_ORDER.indexOf(b.providerId);
+      const ia = order.indexOf(a.providerId);
+      const ib = order.indexOf(b.providerId);
       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
     }
     // Within same provider, sort by latest session

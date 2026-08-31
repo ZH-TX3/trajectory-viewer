@@ -12,6 +12,7 @@ import { ArrowLeft, FileText, Settings } from 'lucide-react';
 
 const AVAILABLE_PROVIDERS = ['claude', 'codex', 'dsh', 'opencode'] as const;
 const SETTINGS_KEY = 'trajectory-viewer.providers.enabled-v1';
+const ORDER_KEY = 'trajectory-viewer.providers.order-v1';
 
 /** Enabled session providers, persisted locally. Defaults to all supported. */
 function loadEnabledProviders(): Set<string> {
@@ -31,9 +32,32 @@ function loadEnabledProviders(): Set<string> {
   return new Set(AVAILABLE_PROVIDERS);
 }
 
+/**
+ * Display order for the provider chips / grouping, persisted locally.
+ * Alphabet soup-freed: only known providers, with any new providers appended
+ * when the saved list is stale.
+ */
+function loadProviderOrder(): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ORDER_KEY) ?? 'null');
+    if (Array.isArray(saved)) {
+      const valid = saved.filter(
+        (p): p is string =>
+          typeof p === 'string' && (AVAILABLE_PROVIDERS as readonly string[]).includes(p),
+      );
+      const seen = new Set(valid);
+      return [...valid, ...AVAILABLE_PROVIDERS.filter((p) => !seen.has(p))];
+    }
+  } catch {
+    /* ignore */
+  }
+  return [...AVAILABLE_PROVIDERS];
+}
+
 export function App() {
   const [mode, setMode] = useState<'browser' | 'settings' | 'file'>('browser');
   const [enabledProviders, setEnabledProviders] = useState<Set<string>>(loadEnabledProviders);
+  const [providerOrder, setProviderOrder] = useState<string[]>(loadProviderOrder);
   const [trajectoryData, setTrajectoryData] = useState<TrajectoryData | null>(null);
   const [sourcePath, setSourcePath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -83,6 +107,12 @@ export function App() {
     });
   }, []);
 
+  const handleReorderProviders = useCallback((order: string[]) => {
+    const valid = order.filter((p) => (AVAILABLE_PROVIDERS as readonly string[]).includes(p));
+    setProviderOrder(valid);
+    localStorage.setItem(ORDER_KEY, JSON.stringify(valid));
+  }, []);
+
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
       {/* Header bar */}
@@ -123,13 +153,15 @@ export function App() {
       {/* Main content */}
       <main className="flex-1 min-h-0">
         {mode === 'browser' && (
-          <SessionBrowser onOpenFile={handleFileOpen} enabledProviders={enabledProviders} />
+          <SessionBrowser onOpenFile={handleFileOpen} enabledProviders={enabledProviders} providerOrder={providerOrder} />
         )}
 
         {mode === 'settings' && (
           <SettingsView
             enabledProviders={enabledProviders}
+            providerOrder={providerOrder}
             onToggleProvider={handleToggleProvider}
+            onReorderOrder={handleReorderProviders}
             onBack={handleBack}
           />
         )}

@@ -405,7 +405,8 @@ export function TrajectoryTimeline({
             .map((boundary) => (
               <div
                 key={`turn-${boundary.turn}`}
-                className="absolute top-0 bottom-0 w-px bg-border/15 pointer-events-none"
+                title={`Turn ${boundary.turn}`}
+                className="absolute top-0 bottom-0 w-px bg-border/30 pointer-events-none"
                 style={{ left: `${((boundary.time - model.start) / fullDuration) * 100}%` }}
               />
             ))}
@@ -419,6 +420,14 @@ export function TrajectoryTimeline({
             const hovered = hover?.recordIndex === span.index;
             const activeSelected = selectedIndex === span.index;
             const highlighted = hovered || activeSelected;
+
+            // Symmetric gutter (DSH-style): inset both sides by a gap that
+            // scales with the bar's width (capped ~1px at full zoom) so bars
+            // never weld together — fixing the old width-floor inflation that
+            // overlapped neighbours once events were dense enough.
+            const spanLeft = ((span.start - model.start) / fullDuration) * 100;
+            const spanWidth = ((span.end - span.start) / fullDuration) * 100;
+            const spanGap = Math.min(spanWidth * 0.08, 0.15);
 
             return (
               <div
@@ -446,10 +455,9 @@ export function TrajectoryTimeline({
                   activeSelected && 'ring-1 ring-blue-500/50 dark:ring-blue-400/50',
                 )}
                 style={{
-                  left: `${((span.start - model.start) / fullDuration) * 100}%`,
-                  width: `${Math.max(((span.end - span.start) / fullDuration) * 100 - 0.35, 0.5)}%`,
+                  left: `calc(${spanLeft}% + ${spanGap}%)`,
+                  width: `calc(${spanWidth}% - ${spanGap * 2}%)`,
                   minWidth: 2,
-                  marginRight: 1,
                   top: `${span.lane * 17 + 1}px`,
                 }}
                 onPointerEnter={() => setHover({ fraction: hover?.fraction ?? 0, recordIndex: span.index })}

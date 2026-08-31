@@ -426,6 +426,10 @@ export function trajectoryRecordId(cell: {
 
 export type TrajectoryTimelineMode = 'sequence' | 'actual';
 
+/** Extra one-unit gap inserted after each turn in sequence mode so dense
+ *  ledgers keep readable turn boundaries instead of one solid band. */
+const SEQUENCE_TURN_GAP = 1;
+
 export interface TrajectorySpanModel {
   start: number;
   end: number;
@@ -505,18 +509,21 @@ export function deriveTrajectoryTimeline(
     };
   }
 
-  // "sequence" mode — layout every visible record at integer positions.
+  // "sequence" mode — layout every visible record at integer positions, with
+  // a one-unit gap after each turn (SEQUENCE_TURN_GAP) so long conversations
+  // show clear separations between turns instead of a single compressed band.
   const spans: TrajectorySpanModel[] = [];
   const turnBoundaries: { turn: number; time: number }[] = [];
+  let cursor = 0;
 
   for (const turn of turns) {
     const cells = turn.groups.flatMap((group) => group.cells.filter((cell) => cell.requestOnly !== true));
     if (cells.length === 0) continue;
-    if (turn.turn !== null) turnBoundaries.push({ turn: turn.turn, time: spans.length });
+    if (turn.turn !== null) turnBoundaries.push({ turn: turn.turn, time: cursor });
     spans.push(
       ...cells.map((cell, offset) => ({
-        start: spans.length + offset,
-        end: spans.length + offset + 1,
+        start: cursor + offset,
+        end: cursor + offset + 1,
         index: cell.index,
         isError: cell.isError === true,
         kind: cell.kind,
@@ -524,10 +531,11 @@ export function deriveTrajectoryTimeline(
         label: cell.text,
       })),
     );
+    cursor += cells.length + SEQUENCE_TURN_GAP;
   }
 
   if (spans.length === 0) return null;
-  return { start: 0, end: spans.length, spans, turnBoundaries };
+  return { start: 0, end: cursor, spans, turnBoundaries };
 }
 
 /**

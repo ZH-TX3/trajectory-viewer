@@ -1194,17 +1194,21 @@ fn collect_json_files(root: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+/// Shared lock serializing any test (in this module and backup) that mutates
+/// the process-global HOME/XDG env vars, so parallel test runs never race.
+#[cfg(test)]
+pub(crate) fn opencode_env_lock() -> &'static std::sync::Mutex<()> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
     use tempfile::tempdir;
-
-    fn opencode_env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     fn write_file(path: &Path, contents: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

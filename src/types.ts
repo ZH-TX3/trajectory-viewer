@@ -77,3 +77,42 @@ export interface SessionMessage {
   content: string;
   ts?: number | null;
 }
+
+// ── Backup & Restore Types ───────────────────────────────────────────────
+
+export interface ProviderSessionInfo {
+  providerId: string;
+  path?: string | null;
+  exists: boolean;
+  fileCount: number;
+  totalBytes: number;
+}
+
+export interface BackupProviderStat {
+  providerId: string;
+  fileCount: number;
+  totalBytes: number;
+}
+
+export interface BackupResult {
+  filePath: string;
+  sizeBytes: number;
+  providers: BackupProviderStat[];
+}
+
+export interface RestoreResult {
+  providers: BackupProviderStat[];
+  safetyBackupDir?: string | null;
+  warnings: string[];
+}
+
+export interface BackupEntry {
+  filename: string;
+  sizeBytes: number;
+  createdAt: number;
+}
+
+export interface BackupSettings {
+  intervalHours: number;
+  retainCount: number;
+}

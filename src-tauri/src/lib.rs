@@ -1,5 +1,6 @@
 // ── Application Entry Point ──────────────────────────────────────────────
 
+mod backup;
 mod commands;
 mod session_manager;
 mod trajectory;
@@ -17,7 +18,25 @@ pub fn run() {
             commands::delete_session,
             commands::delete_sessions_in_dir,
             commands::get_session_mtime,
+            commands::list_provider_session_info,
+            commands::backup_providers,
+            commands::restore_backup,
+            commands::list_session_backups,
+            commands::backup_now,
+            commands::delete_session_backup,
+            commands::restore_session_backup,
+            commands::get_backup_settings,
+            commands::set_backup_settings,
         ])
+        .setup(|_app| {
+            // Background auto-backup: run a pass on startup, then every 5 min.
+            crate::backup::maybe_auto_backup();
+            std::thread::spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(300));
+                crate::backup::maybe_auto_backup();
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running trajectory viewer");
 }

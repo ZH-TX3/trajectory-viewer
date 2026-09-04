@@ -1,9 +1,11 @@
 // ── Settings View ────────────────────────────────────────────────────────
 //
-// Full-page settings (pattern: cc-switch). Hosts the "tools to load" toggles
-// with drag-to-reorder (dnd-kit, matched to cc-switch's ProviderList), plus
-// future settings sections.
+// Full-page settings (pattern: cc-switch) split into two tabs:
+//   General  → which tools are scanned + their display order (drag to reorder)
+//   Advanced → session backup & restore (cc-switch setup)
+// Future sections slot in as more tabs or sections below.
 
+import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   DndContext,
@@ -24,6 +26,9 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { ArrowLeft, Settings, GripVertical } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { BackupSection } from './BackupSection';
+
+type SettingsTab = 'general' | 'advanced';
 
 interface SettingsViewProps {
   enabledProviders: ReadonlySet<string>;
@@ -114,6 +119,7 @@ export function SettingsView({
   onReorderOrder,
   onBack,
 }: SettingsViewProps) {
+  const [tab, setTab] = useState<SettingsTab>('general');
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -135,6 +141,11 @@ export function SettingsView({
     onReorderOrder(arrayMove(orderedIds, oldIndex, newIndex));
   };
 
+  const TABS: Array<{ id: SettingsTab; label: string }> = [
+    { id: 'general', label: 'General' },
+    { id: 'advanced', label: 'Advanced' },
+  ];
+
   return (
     <div className="h-full flex flex-col bg-white dark:bg-gray-900">
       <header className="h-10 border-b border-border/40 flex items-center gap-2 px-3 shrink-0 bg-white dark:bg-gray-900">
@@ -149,28 +160,62 @@ export function SettingsView({
         <span className="text-sm">Settings</span>
       </header>
 
+      {/* Tab row — below the header, full width */}
+      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border/40 shrink-0 bg-white dark:bg-gray-900">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={cn(
+              'px-2.5 py-1 rounded text-[11px] font-medium transition-colors',
+              tab === t.id
+                ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200 shadow-sm'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex-1 overflow-auto">
         <div className="max-w-xl mx-auto w-full p-4 space-y-4">
-          <section className="rounded-xl border border-border/40 overflow-hidden">
-            <div className="px-4 py-3 border-b border-border/40">
-              <h2 className="text-xs font-medium">Session tools</h2>
-              <p className="text-[10px] text-muted-foreground mt-0.5">
-                Choose which tools are scanned into the session list. Drag by the handle to reorder.
-              </p>
-            </div>
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
-                {orderedOptions.map((opt) => (
-                  <SortableRow
-                    key={opt.id}
-                    opt={opt}
-                    enabled={enabledProviders.has(opt.id)}
-                    onToggle={onToggleProvider}
-                  />
-                ))}
-              </SortableContext>
-            </DndContext>
-          </section>
+          {tab === 'general' && (
+            <section className="rounded-xl border border-border/40 overflow-hidden">
+              <div className="px-4 py-3 border-b border-border/40">
+                <h2 className="text-xs font-medium">Session tools</h2>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Choose which tools are scanned into the session list. Drag by the handle to reorder.
+                </p>
+              </div>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+                  {orderedOptions.map((opt) => (
+                    <SortableRow
+                      key={opt.id}
+                      opt={opt}
+                      enabled={enabledProviders.has(opt.id)}
+                      onToggle={onToggleProvider}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
+            </section>
+          )}
+
+          {tab === 'advanced' && (
+            <section className="rounded-xl border border-border/40 overflow-hidden">
+              <div className="px-4 py-3 border-b border-border/40">
+                <h2 className="text-xs font-medium">Session backup & restore</h2>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Pack the AI tools' session directories into zips in{' '}
+                  <span className="font-mono">~/.trajectory-viewer/backups/</span>, auto-backup on an
+                  interval, or restore from one (with a safety copy first).
+                </p>
+              </div>
+              <BackupSection />
+            </section>
+          )}
         </div>
       </div>
     </div>

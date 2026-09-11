@@ -118,7 +118,12 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   const [loading, setLoading] = useState(true);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('messages');
-  const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all');
+  const [providerFilter, setProviderFilter] = useState<ProviderFilter>(() => {
+    // Default to the first enabled provider tab so we don't scan/load every
+    // tool's sessions on startup; fall back to 'all' only if none is enabled.
+    const first = providerOrder.find((id) => enabledProviders.has(id));
+    return (first ?? 'all') as ProviderFilter;
+  });
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
@@ -177,8 +182,9 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     api.listSessions()
       .then((list) => {
         setSessions(list);
-        // Auto-expand first group
-        const groups = groupByProject(list, 'all', providerOrder);
+        // Auto-expand + select within the initially active provider (not 'all',
+        // so we don't hop across tools before the real filter/group runs).
+        const groups = groupByProject(list, providerFilter, providerOrder);
         if (groups.length > 0) {
           setExpandedGroups(new Set([groups[0].groupName]));
           setSelectedKey(`${groups[0].sessions[0].providerId}::${groups[0].sessions[0].sessionId}`);

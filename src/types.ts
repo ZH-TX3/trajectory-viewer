@@ -116,3 +116,21 @@ export interface BackupSettings {
   intervalHours: number;
   retainCount: number;
 }
+
+export interface TrashEntry {
+  id: string;
+  providerId: string;
+  sessionId: string;
+  title: string;
+  deletedAt: number;
+  sizeBytes: number;
+}
+
+export interface TrashManifest {
+  providerId: string;
+  sessionId: string;
+  title: string;
+  deletedAt: number;
+  kind: string;
+  items: Array<{ originalPath: string; storedName: string }>;
+}

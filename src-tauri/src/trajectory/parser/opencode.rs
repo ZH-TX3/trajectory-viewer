@@ -1046,15 +1046,67 @@ fn opencode_storage_of(path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Delete one OpenCode session (JSON file layout or SQLite row set).
-pub fn delete_session(source: &str) -> Result<(), String> {
+/// Trash one OpenCode session, returning the trash entry id.
+///
+/// A SQLite-backed session has no files to move, so its rows are dumped to
+/// JSON inside the trash entry; a JSON-layout session moves its session file
+/// plus the message and part directories that belong to it.
+pub fn trash_session(source: &str) -> Result<String, String> {
     if let Some((db, session_id)) = parse_sqlite_source(source) {
-        return delete_session_sqlite(&db, &session_id);
+        let dump = dump_session_rows(&db, &session_id)?;
+        let title = dump["session"]["title"]
+            .as_str()
+            .unwrap_or(&session_id)
+            .to_string();
+        let id = crate::trash::trash_sqlite_dump("opencode", &session_id, &title, &dump)?;
+        // Only remove the rows once they are safely stored.
+        delete_session_sqlite(&db, &session_id)?;
+        return Ok(id);
     }
-    delete_session_json(Path::new(source))
+
+    let path = Path::new(source);
+    let session_id = read_session_id(path)?;
+    let storage = opencode_storage_of(path)
+        .ok_or_else(|| format!("Cannot locate OpenCode storage for {}", path.display()))?;
+
+    let base = get_opencode_base_dir().ok_or_else(|| "OpenCode directory not found".to_string())?;
+    if !path.starts_with(base.join("storage")) {
+        return Err("Refusing to delete outside OpenCode storage".to_string());
+    }
+
+    // Collect the session file, its message dir and every part dir.
+    let mut targets = vec![path.to_path_buf()];
+    let msg_dir = storage.join("message").join(&session_id);
+    let mut msg_files = Vec::new();
+    collect_json_files(&msg_dir, &mut msg_files);
+    for file in &msg_files {
+        if let Ok(value) = read_json_file(file) {
+            if let Some(message_id) = value.get("id").and_then(|v| v.as_str()) {
+                let part_dir = storage.join("part").join(message_id);
+                if part_dir.is_dir() {
+                    targets.push(part_dir);
+                }
+            }
+        }
+    }
+    if msg_dir.is_dir() {
+        targets.push(msg_dir);
+    }
+
+    let title = read_json_file(path)
+        .ok()
+        .and_then(|v| {
+            v.get("title")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| session_id.clone());
+
+    crate::trash::trash_paths("opencode", &session_id, &title, &targets)
 }
 
 /// Deletion for the legacy JSON layout: session file + message dir + parts.
+#[allow(dead_code)]
 fn delete_session_json(path: &Path) -> Result<(), String> {
     let session_id = read_session_id(path)?;
     let storage = opencode_storage_of(path)
@@ -1136,8 +1188,142 @@ fn delete_session_sqlite(db_path: &Path, session_id: &str) -> Result<(), String>
     Ok(())
 }
 
-/// Delete every OpenCode session whose files live under `dir` (a
-/// `storage/session/{project}` directory), returning how many were removed.
+/// Dump an opencode SQLite session's rows to JSON so it can be trashed and
+/// later restored (the data lives in a database, so there is no file to move).
+pub fn dump_session_rows(db_path: &Path, session_id: &str) -> Result<Value, String> {
+    let conn = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| format!("Failed to open OpenCode database: {e}"))?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, session_id, time_created, time_updated, data FROM message WHERE session_id = ?1",
+        )
+        .map_err(|e| format!("Failed to prepare message dump: {e}"))?;
+    let messages: Vec<Value> = stmt
+        .query_map([session_id], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "sessionId": row.get::<_, String>(1)?,
+                "timeCreated": row.get::<_, i64>(2)?,
+                "timeUpdated": row.get::<_, i64>(3)?,
+                "data": row.get::<_, String>(4)?,
+            }))
+        })
+        .map_err(|e| format!("Failed to dump messages: {e}"))?
+        .flatten()
+        .collect();
+
+    let mut part_stmt = conn
+        .prepare(
+            "SELECT id, message_id, session_id, time_created, time_updated, data FROM part WHERE session_id = ?1",
+        )
+        .map_err(|e| format!("Failed to prepare part dump: {e}"))?;
+    let parts: Vec<Value> = part_stmt
+        .query_map([session_id], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "messageId": row.get::<_, String>(1)?,
+                "sessionId": row.get::<_, String>(2)?,
+                "timeCreated": row.get::<_, i64>(3)?,
+                "timeUpdated": row.get::<_, i64>(4)?,
+                "data": row.get::<_, String>(5)?,
+            }))
+        })
+        .map_err(|e| format!("Failed to dump parts: {e}"))?
+        .flatten()
+        .collect();
+
+    let session = conn
+        .query_row(
+            "SELECT id, title, directory, time_created, time_updated FROM session WHERE id = ?1",
+            [session_id],
+            |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, String>(0)?,
+                    "title": row.get::<_, String>(1)?,
+                    "directory": row.get::<_, String>(2)?,
+                    "timeCreated": row.get::<_, i64>(3)?,
+                    "timeUpdated": row.get::<_, i64>(4)?,
+                }))
+            },
+        )
+        .map_err(|e| format!("Failed to dump session row: {e}"))?;
+
+    Ok(serde_json::json!({
+        "session": session,
+        "messages": messages,
+        "parts": parts,
+    }))
+}
+
+/// Re-insert a dumped opencode session (inverse of `dump_session_rows`).
+///
+/// Uses INSERT OR IGNORE so restoring never clobbers rows that already exist.
+pub fn restore_session_rows(dump: &Value) -> Result<(), String> {
+    let session = &dump["session"];
+    let session_id = session["id"]
+        .as_str()
+        .ok_or_else(|| "Trashed session dump has no session id".to_string())?;
+
+    let base = get_opencode_base_dir().ok_or_else(|| "OpenCode directory not found".to_string())?;
+    let db_path = base.join("opencode.db");
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("Failed to open OpenCode database: {e}"))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+    tx.execute(
+        "INSERT OR IGNORE INTO session (id, title, directory, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            session_id,
+            session["title"].as_str().unwrap_or(""),
+            session["directory"].as_str().unwrap_or(""),
+            session["timeCreated"].as_i64().unwrap_or(0),
+            session["timeUpdated"].as_i64().unwrap_or(0),
+        ],
+    )
+    .map_err(|e| format!("Failed to restore session row: {e}"))?;
+
+    for message in dump["messages"].as_array().into_iter().flatten() {
+        tx.execute(
+            "INSERT OR IGNORE INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                message["id"].as_str().unwrap_or_default(),
+                message["sessionId"].as_str().unwrap_or(session_id),
+                message["timeCreated"].as_i64().unwrap_or(0),
+                message["timeUpdated"].as_i64().unwrap_or(0),
+                message["data"].as_str().unwrap_or("{}"),
+            ],
+        )
+        .map_err(|e| format!("Failed to restore message row: {e}"))?;
+    }
+
+    for part in dump["parts"].as_array().into_iter().flatten() {
+        tx.execute(
+            "INSERT OR IGNORE INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                part["id"].as_str().unwrap_or_default(),
+                part["messageId"].as_str().unwrap_or_default(),
+                part["sessionId"].as_str().unwrap_or(session_id),
+                part["timeCreated"].as_i64().unwrap_or(0),
+                part["timeUpdated"].as_i64().unwrap_or(0),
+                part["data"].as_str().unwrap_or("{}"),
+            ],
+        )
+        .map_err(|e| format!("Failed to restore part row: {e}"))?;
+    }
+
+    tx.commit()
+        .map_err(|e| format!("Failed to commit restore: {e}"))?;
+    Ok(())
+}
+
+/// Trash every OpenCode session whose files live under `dir` (a
+/// `storage/session/{project}` directory), returning how many were trashed.
 pub fn delete_sessions_in_dir(dir: &Path) -> Result<usize, String> {
     opencode_storage_of(dir)
         .ok_or_else(|| format!("Cannot locate OpenCode storage for {}", dir.display()))?;
@@ -1149,13 +1335,15 @@ pub fn delete_sessions_in_dir(dir: &Path) -> Result<usize, String> {
     let mut files = Vec::new();
     collect_json_files(dir, &mut files);
 
-    let mut deleted = 0;
+    let mut trashed = 0;
     for file in &files {
-        if delete_session_json(file).is_ok() {
-            deleted += 1;
+        if let Some(source) = file.to_str() {
+            if trash_session(source).is_ok() {
+                trashed += 1;
+            }
         }
     }
-    Ok(deleted)
+    Ok(trashed)
 }
 
 fn read_json_file(path: &Path) -> Result<Value, String> {
@@ -1477,7 +1665,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_json_session_removes_files_and_parts() {
+    fn trash_json_session_moves_files_and_parts() {
         let _guard = opencode_env_lock().lock().unwrap();
         let dir = tempdir().unwrap();
         #[allow(deprecated)]
@@ -1488,7 +1676,7 @@ mod tests {
         let session_file = storage.join("session/project-1/ses_1.json");
 
         assert!(storage.join("part/msg_1/prt_1.json").exists());
-        delete_session(session_file.to_str().unwrap()).unwrap();
+        let _trash_id = trash_session(session_file.to_str().unwrap()).unwrap();
 
         #[allow(deprecated)]
         std::env::remove_var("XDG_DATA_HOME");

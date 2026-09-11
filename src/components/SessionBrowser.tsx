@@ -361,7 +361,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
       const key = `${session.providerId}::${session.sessionId}`;
       setSessions((prev) => prev.filter((s) => `${s.providerId}::${s.sessionId}` !== key));
       setSelectedKey((prev) => (prev === key ? null : prev));
-      showNotice('ok', 'Session deleted');
+      showNotice('ok', 'Moved to trash — restore any time in Settings → Advanced');
     } catch (err) {
       showNotice('error', `Delete failed: ${String(err)}`);
     }
@@ -387,7 +387,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     }
     setDeletingGroup(false);
     setPendingDeleteGroup(null);
-    showNotice('ok', total > 0 ? `Deleted ${total} session(s)` : 'Nothing to delete');
+    showNotice('ok', total > 0 ? `Moved ${total} session(s) to trash` : 'Nothing to delete');
   }, [pendingDeleteGroup, showNotice]);
 
   const copyResume = useCallback(async () => {
@@ -848,7 +848,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                 Delete all conversations?
               </div>
               <p className="text-xs text-muted-foreground mt-1 break-all">
-                Permanently removes {pendingDeleteGroup.sessions.length} session(s) in{' '}
+                Moves {pendingDeleteGroup.sessions.length} session(s) to the trash in{' '}
                 <span className="font-mono text-[10px]">
                   {pendingDeleteGroup.storageDirs.join(', ')}
                 </span>
@@ -886,7 +886,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                 Delete this conversation?
               </div>
               <p className="text-xs text-muted-foreground mt-1 break-all">
-                Permanently removes session{' '}
+                Moves session{' '}
                 <span className="font-mono text-[10px]">{pendingDeleteSession.sessionId}</span>
                 {pendingDeleteSession.title ? ` (${pendingDeleteSession.title})` : ''}
               </p>

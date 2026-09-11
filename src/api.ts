@@ -10,6 +10,8 @@ import type {
   RestoreResult,
   BackupEntry,
   BackupSettings,
+  TrashEntry,
+  TrashManifest,
 } from './types';
 
 export const api = {
@@ -108,5 +110,25 @@ export const api = {
     targetPath: string,
   ): Promise<number> {
     return await invoke('export_session', { providerId, sourcePath, title, format, targetPath });
+  },
+
+  /** List trashed sessions (newest first). */
+  async listTrash(): Promise<TrashEntry[]> {
+    return await invoke('list_trash');
+  },
+
+  /** Restore a trashed session to its original location. */
+  async restoreTrashEntry(id: string): Promise<TrashManifest> {
+    return await invoke('restore_trash_entry', { id });
+  },
+
+  /** Permanently delete one trash entry. */
+  async deleteTrashEntry(id: string): Promise<void> {
+    return await invoke('delete_trash_entry', { id });
+  },
+
+  /** Permanently delete every trash entry. */
+  async emptyTrash(): Promise<number> {
+    return await invoke('empty_trash');
   },
 };

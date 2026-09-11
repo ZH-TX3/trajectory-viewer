@@ -27,6 +27,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { ArrowLeft, Settings, GripVertical } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { BackupSection } from './BackupSection';
+import { TrashSection } from './TrashSection';
 
 type SettingsTab = 'general' | 'advanced';
 
@@ -204,17 +205,30 @@ export function SettingsView({
           )}
 
           {tab === 'advanced' && (
-            <section className="rounded-xl border border-border/40 overflow-hidden">
-              <div className="px-4 py-3 border-b border-border/40">
-                <h2 className="text-xs font-medium">Session backup & restore</h2>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  Pack the AI tools' session directories into zips in{' '}
-                  <span className="font-mono">~/.trajectory-viewer/backups/</span>, auto-backup on an
-                  interval, or restore from one (with a safety copy first).
-                </p>
-              </div>
-              <BackupSection />
-            </section>
+            <>
+              <section className="rounded-xl border border-border/40 overflow-hidden">
+                <div className="px-4 py-3 border-b border-border/40">
+                  <h2 className="text-xs font-medium">Session backup & restore</h2>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Pack the AI tools' session directories into zips in{' '}
+                    <span className="font-mono">~/.trajectory-viewer/backups/</span>, auto-backup on an
+                    interval, or restore from one (with a safety copy first).
+                  </p>
+                </div>
+                <BackupSection />
+              </section>
+
+              <section className="rounded-xl border border-border/40 overflow-hidden">
+                <div className="px-4 py-3 border-b border-border/40">
+                  <h2 className="text-xs font-medium">Trash</h2>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Deleted sessions land here and can be restored. Entries older than 30 days are
+                    auto-purged.
+                  </p>
+                </div>
+                <TrashSection />
+              </section>
+            </>
           )}
         </div>
       </div>

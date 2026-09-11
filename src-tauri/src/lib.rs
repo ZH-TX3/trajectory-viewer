@@ -5,6 +5,7 @@ mod commands;
 mod export;
 mod session_manager;
 mod trajectory;
+mod trash;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -29,6 +30,10 @@ pub fn run() {
             commands::get_backup_settings,
             commands::set_backup_settings,
             commands::export_session,
+            commands::list_trash,
+            commands::restore_trash_entry,
+            commands::delete_trash_entry,
+            commands::empty_trash,
         ])
         .setup(|_app| {
             // Background auto-backup: run a pass on startup, then every 5 min.
@@ -37,6 +42,9 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_secs(300));
                 crate::backup::maybe_auto_backup();
             });
+            // Drop trash entries older than 30 days (trash is still directly
+            // manageable in the UI; this is just unbounded-growth protection).
+            let _ = crate::trash::purge_old_entries(30);
             Ok(())
         })
         .run(tauri::generate_context!())

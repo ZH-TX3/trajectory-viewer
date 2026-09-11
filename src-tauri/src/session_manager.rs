@@ -771,12 +771,15 @@ fn managed_session_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Delete a session file directly (plus its now-empty parent directory for the
-/// DSH `{session-id}/` layout). Refuses anything outside the managed dirs.
-pub fn delete_session_file(source_path: &str) -> Result<(), String> {
-    // OpenCode sessions (SQLite reference or session JSON under storage/).
+/// Delete a session by moving it into the trash (restorable), rather than
+/// removing it outright. Refuses anything outside the managed dirs.
+///
+/// Returns the trash entry id so the caller can offer an undo.
+pub fn delete_session_file(source_path: &str) -> Result<String, String> {
+    // OpenCode sessions: a SQLite session's rows are dumped to JSON (there is
+    // no file to move); a JSON-layout session moves its file + message/part dirs.
     if crate::trajectory::parser::opencode::is_opencode_source(source_path) {
-        return crate::trajectory::parser::opencode::delete_session(source_path);
+        return crate::trajectory::parser::opencode::trash_session(source_path);
     }
 
     let path = Path::new(source_path);
@@ -791,11 +794,48 @@ pub fn delete_session_file(source_path: &str) -> Result<(), String> {
     if !managed.iter().any(|root| path.starts_with(root)) {
         return Err("Refusing to delete outside managed session directories".to_string());
     }
-    std::fs::remove_file(path).map_err(|e| format!("Failed to delete session file: {e}"))?;
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::remove_dir(parent); // best-effort cleanup of an empty dir
+
+    let provider_id = provider_of_path(path);
+    let session_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("session")
+        .to_string();
+    let title = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&session_id)
+        .to_string();
+
+    // DSH stores a session as `{session-id}/session.jsonl.zstd`; trash the
+    // whole directory so the session can be restored intact.
+    let target = match path.parent() {
+        Some(parent) if is_dsh_session_dir(parent) => parent.to_path_buf(),
+        _ => path.to_path_buf(),
+    };
+
+    crate::trash::trash_paths(&provider_id, &session_id, &title, &[target])
+}
+
+/// A DSH session directory is named `ses_*`/`{id}` and holds the zstd file.
+fn is_dsh_session_dir(dir: &Path) -> bool {
+    dir.join("session.jsonl.zstd").is_file()
+}
+
+/// Best-effort provider attribution for a managed session path.
+fn provider_of_path(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    if normalized.contains("/.claude/") {
+        "claude".to_string()
+    } else if normalized.contains("/.codex/") {
+        "codex".to_string()
+    } else if normalized.contains("/.dsh/") {
+        "dsh".to_string()
+    } else if normalized.contains("/opencode/") {
+        "opencode".to_string()
+    } else {
+        "unknown".to_string()
     }
-    Ok(())
 }
 
 /// Collect every session file (JSONL + zstd) under `root`.
@@ -820,8 +860,8 @@ fn remove_empty_dirs(dir: &Path) {
     walk(dir);
 }
 
-/// Delete every session file under a managed project directory (all its
-/// conversations), cleaning up now-empty subdirectories.
+/// Trash every session file under a managed project directory (all its
+/// conversations), returning how many were trashed.
 pub fn delete_sessions_in_dir(dir: &str) -> Result<usize, String> {
     let path = Path::new(dir);
     if !path.is_dir() {
@@ -847,7 +887,7 @@ pub fn delete_sessions_in_dir(dir: &str) -> Result<usize, String> {
     collect_session_files(path, &mut files);
     let mut deleted = 0;
     for file in &files {
-        if std::fs::remove_file(file).is_ok() {
+        if delete_session_file(&file.to_string_lossy()).is_ok() {
             deleted += 1;
         }
     }

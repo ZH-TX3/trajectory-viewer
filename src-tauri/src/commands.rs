@@ -29,17 +29,36 @@ pub fn get_session_messages(
     session_manager::load_messages(&provider_id, &source_path)
 }
 
-/// Delete a session file (and its now-empty parent dir). Only paths inside the
-/// managed session directories are accepted.
+/// Move a session into the trash (restorable), returning the trash entry id.
 #[tauri::command]
-pub fn delete_session(source_path: String) -> Result<(), String> {
+pub fn delete_session(source_path: String) -> Result<String, String> {
     session_manager::delete_session_file(&source_path)
 }
 
-/// Delete every session file inside a managed project directory.
+/// Move every session inside a managed project directory into the trash.
 #[tauri::command]
 pub fn delete_sessions_in_dir(dir: String) -> Result<usize, String> {
     session_manager::delete_sessions_in_dir(&dir)
+}
+
+#[tauri::command]
+pub fn list_trash() -> Vec<crate::trash::TrashEntry> {
+    crate::trash::list_trash()
+}
+
+#[tauri::command]
+pub fn restore_trash_entry(id: String) -> Result<crate::trash::TrashManifest, String> {
+    crate::trash::restore_entry(&id)
+}
+
+#[tauri::command]
+pub fn delete_trash_entry(id: String) -> Result<(), String> {
+    crate::trash::delete_entry(&id)
+}
+
+#[tauri::command]
+pub fn empty_trash() -> Result<usize, String> {
+    crate::trash::empty_trash()
 }
 
 /// Last-modified timestamp (ms) of a session file, for change polling.

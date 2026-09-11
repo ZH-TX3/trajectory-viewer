@@ -57,9 +57,29 @@ pub fn get_session_mtime(source_path: String) -> Result<i64, String> {
 // ── Session backup / restore ─────────────────────────────────────────────
 
 /// Existence + size of every tool's session directory (for the backup panel).
+///
+/// Recursively walking ~30k files takes ~1s, so this returns the known paths
+/// immediately with `exists`/`counted` flags and does the counting on a
+/// background thread — the panel renders instantly and fills in sizes when
+/// the walk finishes (the second call then hits the mtime cache).
 #[tauri::command]
-pub fn list_provider_session_info() -> Vec<crate::backup::ProviderSessionInfo> {
-    crate::backup::list_provider_session_info()
+pub async fn list_provider_session_info(
+    app: tauri::AppHandle,
+) -> Result<Vec<crate::backup::ProviderSessionInfo>, String> {
+    use tauri::Emitter;
+
+    // Fast path: if every dir is already cached, answer synchronously.
+    if let Some(cached) = crate::backup::cached_provider_session_info() {
+        return Ok(cached);
+    }
+
+    let immediate = crate::backup::provider_session_info_placeholder();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let full = crate::backup::list_provider_session_info();
+        let _ = handle.emit("provider-session-info", full);
+    });
+    Ok(immediate)
 }
 
 /// Pack the selected providers' session dirs into a single zip at `target_path`.

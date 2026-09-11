@@ -109,14 +109,24 @@ pub fn provider_session_dir(provider_id: &str) -> Option<PathBuf> {
     }
 }
 
+/// Recursively total up a directory's file count and bytes.
+///
+/// Uses `DirEntry::file_type()` (cheap, already returned by read_dir on
+/// Windows) instead of `metadata()` per entry, and only stats real files for
+/// their length — this roughly halves the syscalls versus a naive walk.
 fn count_files(dir: &Path, count: &mut usize, bytes: &mut u64) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                count_files(&path, count, bytes);
-            } else if let Ok(meta) = std::fs::metadata(&path) {
-                *count += 1;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            count_files(&entry.path(), count, bytes);
+        } else if file_type.is_file() {
+            *count += 1;
+            if let Ok(meta) = entry.metadata() {
                 *bytes += meta.len();
             }
         }
@@ -124,11 +134,26 @@ fn count_files(dir: &Path, count: &mut usize, bytes: &mut u64) {
 }
 
 /// Per-provider existence/size info for the backup panel's checkboxes.
+///
+/// Recursively stat-ing ~30k files takes seconds, so results are cached and
+/// invalidated by the directory's own mtime (a session write bumps it).
 pub fn list_provider_session_info() -> Vec<ProviderSessionInfo> {
+    let mut cache = session_info_cache().lock().unwrap_or_else(|e| e.into_inner());
     KNOWN_PROVIDERS
         .iter()
         .map(|id| {
             let dir = provider_session_dir(id);
+            let mtime = dir
+                .as_ref()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .and_then(|m| m.modified().ok());
+
+            if let (Some(cached), Some(mtime)) = (cache.get(*id), mtime) {
+                if cached.0 == mtime {
+                    return cached.1.clone();
+                }
+            }
+
             let mut info = ProviderSessionInfo {
                 provider_id: (*id).to_string(),
                 path: dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
@@ -142,7 +167,57 @@ pub fn list_provider_session_info() -> Vec<ProviderSessionInfo> {
                     count_files(path, &mut info.file_count, &mut info.total_bytes);
                 }
             }
+            if let Some(mtime) = mtime {
+                cache.insert((*id).to_string(), (mtime, info.clone()));
+            }
             info
+        })
+        .collect()
+}
+
+type SessionInfoCache =
+    std::sync::Mutex<std::collections::HashMap<String, (std::time::SystemTime, ProviderSessionInfo)>>;
+
+fn session_info_cache() -> &'static SessionInfoCache {
+    static CACHE: std::sync::OnceLock<SessionInfoCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Return the cached stats only when every known provider is already cached
+/// (so the command can answer without a walk). `None` triggers a background
+/// refresh instead.
+pub fn cached_provider_session_info() -> Option<Vec<ProviderSessionInfo>> {
+    let cache = session_info_cache().lock().ok()?;
+    let mut out = Vec::with_capacity(KNOWN_PROVIDERS.len());
+    for id in KNOWN_PROVIDERS {
+        let dir = provider_session_dir(id);
+        let mtime = dir
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+        let cached = cache.get(id)?;
+        if Some(cached.0) != mtime {
+            return None; // stale → let the caller refresh in the background
+        }
+        out.push(cached.1.clone());
+    }
+    Some(out)
+}
+
+/// Instant, walk-free snapshot: paths + existence only, counts zeroed. Used so
+/// the backup panel paints immediately while the real counts are computed.
+pub fn provider_session_info_placeholder() -> Vec<ProviderSessionInfo> {
+    KNOWN_PROVIDERS
+        .iter()
+        .map(|id| {
+            let dir = provider_session_dir(id);
+            ProviderSessionInfo {
+                provider_id: (*id).to_string(),
+                path: dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                exists: dir.as_ref().map(|p| p.is_dir()).unwrap_or(false),
+                file_count: 0,
+                total_bytes: 0,
+            }
         })
         .collect()
 }
@@ -597,6 +672,27 @@ mod tests {
             assert!(home.join(".codex/sessions/2026/08/31/rollout-a.jsonl").exists());
             assert!(home.join(".local/share/opencode/storage/message/ses_1/msg_1.json").exists());
         });
+    }
+
+    #[test]
+    #[ignore]
+    fn time_provider_session_info() {
+        let t0 = std::time::Instant::now();
+        let infos = list_provider_session_info();
+        let total = t0.elapsed();
+        let mut out = String::new();
+        for info in &infos {
+            out.push_str(&format!(
+                "{:>9} exists={} files={:>6} bytes={:>12}\n",
+                info.provider_id, info.exists, info.file_count, info.total_bytes
+            ));
+        }
+        out.push_str(&format!("TOTAL list_provider_session_info: {:?}\n", total));
+        // Second call should hit the mtime-keyed cache.
+        let t_cached = std::time::Instant::now();
+        let _ = list_provider_session_info();
+        out.push_str(&format!("CACHED 2nd call: {:?}\n", t_cached.elapsed()));
+        let _ = std::fs::write(std::env::temp_dir().join("backup_timing.txt"), out);
     }
 
     #[test]

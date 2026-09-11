@@ -7,6 +7,7 @@
 // Restore is merge+overwrite after an automatic safety copy.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { Download, Loader2, RotateCw, RotateCcw, Trash2, RefreshCw, Check } from 'lucide-react';
 import { api } from '../api';
 import type { BackupEntry, BackupSettings, ProviderSessionInfo } from '../types';
@@ -76,6 +77,17 @@ export function BackupSection() {
     api.getBackupSettings().then(setSettings).catch(() => setSettings(null));
     void refresh();
   }, [refresh]);
+
+  // The provider walk runs on a background thread; sizes arrive via event so
+  // the panel paints instantly instead of blocking on ~30k file stats.
+  useEffect(() => {
+    const unlisten = listen<ProviderSessionInfo[]>('provider-session-info', (event) => {
+      setProviders(event.payload);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // Default-select every found tool once.
   useEffect(() => {
@@ -228,7 +240,11 @@ export function BackupSection() {
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium">{PROVIDER_LABELS[p.providerId] ?? p.providerId}</div>
                 <div className="text-[10px] text-muted-foreground truncate">
-                  {p.exists ? `${p.fileCount} files · ${formatBytes(p.totalBytes)}` : 'not found on this machine'}
+                  {!p.exists
+                    ? 'not found on this machine'
+                    : p.fileCount === 0 && p.totalBytes === 0
+                      ? 'measuring…'
+                      : `${p.fileCount} files · ${formatBytes(p.totalBytes)}`}
                   <span className="opacity-60"> — {p.path}</span>
                 </div>
               </div>

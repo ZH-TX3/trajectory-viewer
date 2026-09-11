@@ -12,7 +12,7 @@ import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import {
   MessageSquare, GitBranch, Clock, FileText, Loader2,
   ChevronRight, ChevronDown, Folder, FolderOpen, GripVertical,
-  Pencil, Trash2, Copy, Check, RotateCw,
+  Pencil, Trash2, Copy, Check, RotateCw, Download,
 } from 'lucide-react';
 
 // Custom session titles are persisted locally, keyed by provider::sessionId.
@@ -147,6 +147,8 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     noticeTimer.current = setTimeout(() => setNotice(null), 3200);
   }, []);
   const [copied, setCopied] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   // ── Sidebar resize handling ────────────────────────────────────────
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -409,6 +411,45 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     );
   }
 
+  /** Export the selected session as Markdown or JSONL via a save dialog. */
+  const handleExport = useCallback(
+    async (format: 'md' | 'jsonl') => {
+      setExportMenuOpen(false);
+      const session = selectedSession;
+      if (!session?.sourcePath) return;
+      const title = sessionTitle(session);
+      // Keep the filename filesystem-safe.
+      const safeTitle = title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 60).trim() || session.sessionId;
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const target = await save({
+          title: `Export session as ${format.toUpperCase()}`,
+          defaultPath: `${safeTitle}.${format}`,
+          filters: [
+            format === 'md'
+              ? { name: 'Markdown', extensions: ['md'] }
+              : { name: 'JSON Lines', extensions: ['jsonl'] },
+          ],
+        });
+        if (!target) return;
+        setExporting(true);
+        const count = await api.exportSession(
+          session.providerId,
+          session.sourcePath,
+          title,
+          format,
+          target,
+        );
+        showNotice('ok', `Exported ${count} record(s) to ${target}`);
+      } catch (err) {
+        showNotice('error', `Export failed: ${String(err)}`);
+      } finally {
+        setExporting(false);
+      }
+    },
+    [selectedSession, customTitles, showNotice],
+  );
+
   const formatTime = (ts: number | null | undefined) => {
     if (!ts) return '';
     return new Date(ts).toLocaleString();
@@ -657,6 +698,37 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
               <span className="text-xs font-medium truncate">{sessionTitle(selectedSession)}</span>
 
               <div className="flex ml-auto gap-1">
+                {/* Export menu */}
+                <div className="relative">
+                  <button
+                    onClick={() => setExportMenuOpen((v) => !v)}
+                    disabled={exporting}
+                    title="Export this session"
+                    className="flex items-center gap-1 px-2 py-1.5 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-60"
+                  >
+                    {exporting ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                  </button>
+                  {exportMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setExportMenuOpen(false)} />
+                      <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded-lg border border-border/40 bg-white dark:bg-gray-900 shadow-lg overflow-hidden">
+                        <button
+                          onClick={() => handleExport('md')}
+                          className="w-full text-left px-3 py-2 text-[11px] hover:bg-muted/40 transition-colors"
+                        >
+                          Markdown transcript
+                        </button>
+                        <button
+                          onClick={() => handleExport('jsonl')}
+                          className="w-full text-left px-3 py-2 text-[11px] hover:bg-muted/40 transition-colors border-t border-border/40"
+                        >
+                          JSONL events
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
                 <button
                   onClick={() => setActiveTab('messages')}
                   className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] transition-all ${

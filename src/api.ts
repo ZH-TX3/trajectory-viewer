@@ -98,4 +98,15 @@ export const api = {
   async setBackupSettings(settings: BackupSettings): Promise<void> {
     return await invoke('set_backup_settings', { settings });
   },
+
+  /** Export one session as Markdown or JSONL; returns the record count. */
+  async exportSession(
+    providerId: string,
+    sourcePath: string,
+    title: string,
+    format: 'md' | 'jsonl',
+    targetPath: string,
+  ): Promise<number> {
+    return await invoke('export_session', { providerId, sourcePath, title, format, targetPath });
+  },
 };

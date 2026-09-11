@@ -2,6 +2,7 @@
 
 mod backup;
 mod commands;
+mod export;
 mod session_manager;
 mod trajectory;
 
@@ -27,6 +28,7 @@ pub fn run() {
             commands::restore_session_backup,
             commands::get_backup_settings,
             commands::set_backup_settings,
+            commands::export_session,
         ])
         .setup(|_app| {
             // Background auto-backup: run a pass on startup, then every 5 min.

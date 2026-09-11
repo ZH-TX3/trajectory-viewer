@@ -133,3 +133,15 @@ pub fn get_backup_settings() -> crate::backup::BackupSettings {
 pub fn set_backup_settings(settings: crate::backup::BackupSettings) -> Result<(), String> {
     crate::backup::set_backup_settings(&settings)
 }
+
+/// Export one session as Markdown or JSONL. Returns the record count written.
+#[tauri::command]
+pub fn export_session(
+    provider_id: String,
+    source_path: String,
+    title: String,
+    format: String,
+    target_path: String,
+) -> Result<usize, String> {
+    crate::export::export_session(&provider_id, &source_path, &title, &format, &target_path)
+}

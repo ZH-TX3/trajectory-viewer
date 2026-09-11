@@ -64,6 +64,34 @@ pub fn parse_timestamp_to_ms(value: &serde_json::Value) -> Option<i64> {
         .map(|dt: DateTime<FixedOffset>| dt.timestamp_millis())
 }
 
+/// Counters for lines/entries skipped while parsing a damaged session file.
+///
+/// Session logs are written incrementally, so a crashed or truncated session
+/// leaves a partial last line — and long-lived files occasionally contain a
+/// corrupt entry. Skipping those keeps the rest of the session readable
+/// instead of failing the whole parse.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ParseWarnings {
+    pub skipped_lines: usize,
+}
+
+impl ParseWarnings {
+    /// Record one unparseable line and log it (bounded noise: the caller
+    /// decides how loudly to report the total).
+    pub fn skip_line(&mut self, reason: &str) {
+        self.skipped_lines += 1;
+        if self.skipped_lines <= 5 {
+            eprintln!("[trajectory] skipping unparseable line: {reason}");
+        }
+    }
+
+    /// Human-readable summary, or `None` when nothing was skipped.
+    pub fn summary(&self) -> Option<String> {
+        (self.skipped_lines > 0)
+            .then(|| format!("{} malformed line(s) skipped", self.skipped_lines))
+    }
+}
+
 /// Estimate per-event duration from the following event timestamp and
 /// approximate TTFT for assistant messages.
 ///

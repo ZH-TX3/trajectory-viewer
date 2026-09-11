@@ -85,7 +85,10 @@ pub struct BackupSettings {
 
 impl Default for BackupSettings {
     fn default() -> Self {
-        BackupSettings { interval_hours: 24, retain_count: 10 }
+        BackupSettings {
+            interval_hours: 24,
+            retain_count: 10,
+        }
     }
 }
 
@@ -138,7 +141,9 @@ fn count_files(dir: &Path, count: &mut usize, bytes: &mut u64) {
 /// Recursively stat-ing ~30k files takes seconds, so results are cached and
 /// invalidated by the directory's own mtime (a session write bumps it).
 pub fn list_provider_session_info() -> Vec<ProviderSessionInfo> {
-    let mut cache = session_info_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = session_info_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     KNOWN_PROVIDERS
         .iter()
         .map(|id| {
@@ -175,8 +180,9 @@ pub fn list_provider_session_info() -> Vec<ProviderSessionInfo> {
         .collect()
 }
 
-type SessionInfoCache =
-    std::sync::Mutex<std::collections::HashMap<String, (std::time::SystemTime, ProviderSessionInfo)>>;
+type SessionInfoCache = std::sync::Mutex<
+    std::collections::HashMap<String, (std::time::SystemTime, ProviderSessionInfo)>,
+>;
 
 fn session_info_cache() -> &'static SessionInfoCache {
     static CACHE: std::sync::OnceLock<SessionInfoCache> = std::sync::OnceLock::new();
@@ -226,35 +232,49 @@ pub fn provider_session_info_placeholder() -> Vec<ProviderSessionInfo> {
 
 /// Write the session dirs of `provider_ids` into `target_path` as a zip,
 /// each provider under a top-level folder named after it.
-pub fn backup_providers(provider_ids: &[String], target_path: &Path) -> Result<BackupResult, String> {
+pub fn backup_providers(
+    provider_ids: &[String],
+    target_path: &Path,
+) -> Result<BackupResult, String> {
     let file = File::create(target_path)
         .map_err(|e| format!("Cannot create backup file {}: {e}", target_path.display()))?;
 
-    let options = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     let mut writer = ZipWriter::new(BufWriter::new(file));
     let mut stats = Vec::new();
 
     for id in provider_ids {
         let Some(dir) = provider_session_dir(id) else {
-            stats.push(BackupProviderStat { provider_id: id.clone(), file_count: 0, total_bytes: 0 });
+            stats.push(BackupProviderStat {
+                provider_id: id.clone(),
+                file_count: 0,
+                total_bytes: 0,
+            });
             continue;
         };
         if !dir.is_dir() {
-            stats.push(BackupProviderStat { provider_id: id.clone(), file_count: 0, total_bytes: 0 });
+            stats.push(BackupProviderStat {
+                provider_id: id.clone(),
+                file_count: 0,
+                total_bytes: 0,
+            });
             continue;
         }
         let prefix = Path::new(id.as_str());
         let (file_count, total_bytes) = add_dir_to_zip(&mut writer, &dir, &dir, prefix, &options)?;
-        stats.push(BackupProviderStat { provider_id: id.clone(), file_count, total_bytes });
+        stats.push(BackupProviderStat {
+            provider_id: id.clone(),
+            file_count,
+            total_bytes,
+        });
     }
 
-    writer.finish().map_err(|e| format!("Failed to finalize zip: {e}"))?;
+    writer
+        .finish()
+        .map_err(|e| format!("Failed to finalize zip: {e}"))?;
 
-    let size_bytes = std::fs::metadata(target_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let size_bytes = std::fs::metadata(target_path).map(|m| m.len()).unwrap_or(0);
 
     Ok(BackupResult {
         file_path: target_path.to_string_lossy().into_owned(),
@@ -273,8 +293,8 @@ fn add_dir_to_zip<W: Write + io::Seek>(
     let mut file_count = 0usize;
     let mut total_bytes = 0u64;
 
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -291,11 +311,13 @@ fn add_dir_to_zip<W: Write + io::Seek>(
             file_count += c;
             total_bytes += b;
         } else {
-            let meta = std::fs::metadata(&path).map_err(|e| format!("Cannot stat {}: {e}", path.display()))?;
+            let meta = std::fs::metadata(&path)
+                .map_err(|e| format!("Cannot stat {}: {e}", path.display()))?;
             writer
                 .start_file(zip_name.clone(), *options)
                 .map_err(|e| format!("Zip error on {zip_name}: {e}"))?;
-            let mut src = File::open(&path).map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
+            let mut src =
+                File::open(&path).map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
             let n = io::copy(&mut src, writer).map_err(|e| format!("Zip write error: {e}"))?;
             file_count += 1;
             total_bytes += meta.len();
@@ -316,14 +338,16 @@ fn add_dir_to_zip<W: Write + io::Seek>(
 pub fn restore_backup(file_path: &Path) -> Result<RestoreResult, String> {
     let file = File::open(file_path)
         .map_err(|e| format!("Cannot open backup {}: {e}", file_path.display()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("Invalid zip archive: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {e}"))?;
 
     // Group zip entries by top-level provider folder.
     let mut by_provider: std::collections::BTreeMap<String, Vec<(String, PathBuf)>> =
         std::collections::BTreeMap::new();
     for i in 0..archive.len() {
-        let entry = archive.by_index(i).map_err(|e| format!("Zip read error: {e}"))?;
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Zip read error: {e}"))?;
         // enclosed_name() refuses any entry escaping the archive root.
         let rel = entry
             .enclosed_name()
@@ -387,12 +411,20 @@ pub fn restore_backup(file_path: &Path) -> Result<RestoreResult, String> {
                 }
             }
         }
-        stats.push(BackupProviderStat { provider_id: provider.clone(), file_count, total_bytes });
+        stats.push(BackupProviderStat {
+            provider_id: provider.clone(),
+            file_count,
+            total_bytes,
+        });
     }
 
     Ok(RestoreResult {
         providers: stats,
-        safety_backup_dir: if safety_dirs.is_empty() { None } else { Some(safety_dirs.join(", ")) },
+        safety_backup_dir: if safety_dirs.is_empty() {
+            None
+        } else {
+            Some(safety_dirs.join(", "))
+        },
         warnings,
     })
 }
@@ -488,10 +520,14 @@ pub fn list_backups() -> Vec<BackupEntry> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
-            entries.push(BackupEntry { filename: fname, size_bytes, created_at });
+            entries.push(BackupEntry {
+                filename: fname,
+                size_bytes,
+                created_at,
+            });
         }
     }
-    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    entries.sort_by_key(|b| std::cmp::Reverse(b.created_at));
     entries
 }
 
@@ -554,10 +590,11 @@ pub fn maybe_auto_backup() {
             let elapsed_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
-                .unwrap_or(0) - created;
+                .unwrap_or(0)
+                - created;
             elapsed_ms >= (settings.interval_hours as i64) * 3600 * 1000
         }
-        Some(_) => false,   // auto-backup disabled
+        Some(_) => false,                    // auto-backup disabled
         None => settings.interval_hours > 0, // no backups yet → create one
     };
 
@@ -632,20 +669,34 @@ mod tests {
         let home = dir.path().join("home");
         with_home(&home, || {
             // Real-looking session dirs for three providers.
-            write_file(&home.join(".claude/projects/proj-x/sess-1.jsonl"), b"{}\n{}\n");
-            write_file(&home.join(".codex/sessions/2026/08/31/rollout-a.jsonl"), b"line\n");
+            write_file(
+                &home.join(".claude/projects/proj-x/sess-1.jsonl"),
+                b"{}\n{}\n",
+            );
+            write_file(
+                &home.join(".codex/sessions/2026/08/31/rollout-a.jsonl"),
+                b"line\n",
+            );
             write_file(
                 &home.join(".local/share/opencode/storage/message/ses_1/msg_1.json"),
                 br#"{"role":"user"}"#,
             );
             // opencode.db must NOT be included in the backup.
-            write_file(&home.join(".local/share/opencode/opencode.db"), b"raw db bytes");
+            write_file(
+                &home.join(".local/share/opencode/opencode.db"),
+                b"raw db bytes",
+            );
 
             let target = dir.path().join("backup.zip");
             let res = backup_providers(
-                &["claude".to_string(), "codex".to_string(), "opencode".to_string()],
+                &[
+                    "claude".to_string(),
+                    "codex".to_string(),
+                    "opencode".to_string(),
+                ],
                 &target,
-            ).unwrap();
+            )
+            .unwrap();
             assert_eq!(res.providers.len(), 3);
             assert_eq!(res.providers[0].provider_id, "claude");
             assert_eq!(res.providers[0].file_count, 1);
@@ -654,7 +705,10 @@ mod tests {
             let mut archive = zip::ZipArchive::new(File::open(&target).unwrap()).unwrap();
             for i in 0..archive.len() {
                 let name = archive.by_index(i).unwrap().name().to_string();
-                assert!(!name.contains("opencode.db"), "db leaked into archive: {name}");
+                assert!(
+                    !name.contains("opencode.db"),
+                    "db leaked into archive: {name}"
+                );
             }
             drop(archive);
 
@@ -665,12 +719,22 @@ mod tests {
             std::fs::remove_dir_all(&codex_dir).unwrap();
 
             let rr = restore_backup(&target).unwrap();
-            assert!(rr.providers.iter().any(|s| s.provider_id == "claude" && s.file_count == 1));
-            assert!(rr.safety_backup_dir.is_some(), "pre-restore safety copy created");
+            assert!(rr
+                .providers
+                .iter()
+                .any(|s| s.provider_id == "claude" && s.file_count == 1));
+            assert!(
+                rr.safety_backup_dir.is_some(),
+                "pre-restore safety copy created"
+            );
 
             assert!(home.join(".claude/projects/proj-x/sess-1.jsonl").exists());
-            assert!(home.join(".codex/sessions/2026/08/31/rollout-a.jsonl").exists());
-            assert!(home.join(".local/share/opencode/storage/message/ses_1/msg_1.json").exists());
+            assert!(home
+                .join(".codex/sessions/2026/08/31/rollout-a.jsonl")
+                .exists());
+            assert!(home
+                .join(".local/share/opencode/storage/message/ses_1/msg_1.json")
+                .exists());
         });
     }
 
@@ -708,6 +772,9 @@ mod tests {
         writer.finish().unwrap();
 
         let err = restore_backup(&target).unwrap_err();
-        assert!(err.contains("unsafe"), "expected unsafe-path rejection, got: {err}");
+        assert!(
+            err.contains("unsafe"),
+            "expected unsafe-path rejection, got: {err}"
+        );
     }
 }

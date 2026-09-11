@@ -228,7 +228,7 @@ fn parse_claude_session(path: &Path) -> Option<SessionMeta> {
     // Prefer the user-set /rename title, then the model-generated title, then
     // the first user message, then the project directory name.
     let title = custom_title
-        .or_else(|| ai_title)
+        .or(ai_title)
         .or_else(|| first_user_message.map(|t| truncate(&t, 80)))
         .or_else(|| {
             project_dir
@@ -623,18 +623,16 @@ fn parse_dsh_session(path: &Path) -> Option<SessionMeta> {
                     title = Some(t);
                 }
             }
-            Some("user/message") => {
-                if first_user.is_none() {
-                    if let Some(content) = v["data"]["content"].as_array() {
-                        for item in content {
-                            if let Some(t) = item["text"]
-                                .as_str()
-                                .map(|s| s.trim())
-                                .filter(|s| !s.is_empty() && !s.starts_with('<'))
-                            {
-                                first_user = Some(t.to_string());
-                                break;
-                            }
+            Some("user/message") if first_user.is_none() => {
+                if let Some(content) = v["data"]["content"].as_array() {
+                    for item in content {
+                        if let Some(t) = item["text"]
+                            .as_str()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty() && !s.starts_with('<'))
+                        {
+                            first_user = Some(t.to_string());
+                            break;
                         }
                     }
                 }
@@ -759,10 +757,14 @@ fn truncate(text: &str, max_chars: usize) -> String {
 
 /// Directories we allow session deletion from.
 fn managed_session_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = [claude_projects_dir(), codex_sessions_dir(), dsh_sessions_dir()]
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut dirs: Vec<PathBuf> = [
+        claude_projects_dir(),
+        codex_sessions_dir(),
+        dsh_sessions_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     if let Some(opencode_base) = crate::trajectory::parser::opencode::get_opencode_base_dir() {
         dirs.push(opencode_base);
     }
@@ -834,7 +836,10 @@ pub fn delete_sessions_in_dir(dir: &str) -> Result<usize, String> {
     let managed = managed_session_dirs();
     // Allow any directory strictly inside a managed root (project dirs), but
     // never the managed roots themselves.
-    if !managed.iter().any(|root| path.starts_with(root) && path != root) {
+    if !managed
+        .iter()
+        .any(|root| path.starts_with(root) && path != root)
+    {
         return Err("Refusing to delete outside managed session directories".to_string());
     }
 
@@ -849,8 +854,3 @@ pub fn delete_sessions_in_dir(dir: &str) -> Result<usize, String> {
     remove_empty_dirs(path);
     Ok(deleted)
 }
-
-
-
-
-

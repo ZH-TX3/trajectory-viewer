@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms};
+use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms, ParseWarnings};
 use crate::trajectory::{ContentBlock, TrajectoryEvent};
 
 /// Parse a Claude Code JSONL session file into trajectory events.
@@ -25,16 +25,27 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
     let mut tool_call_tracker: HashMap<String, (String, String)> = HashMap::new();
     let mut current_turn = 0usize;
     let mut current_step = 0usize;
+    let mut warnings = ParseWarnings::default();
 
     for line in reader.lines() {
-        let line = line.map_err(|e| format!("Failed to read line: {e}"))?;
+        // A truncated final line (crashed session) is expected; skip it and
+        // keep the rest of the session readable.
+        let Ok(line) = line else {
+            warnings.skip_line("unreadable line");
+            continue;
+        };
         let trimmed = line.trim().to_string();
         if trimmed.is_empty() {
             continue;
         }
 
-        let json: Value =
-            serde_json::from_str(&trimmed).map_err(|e| format!("Invalid JSON: {e}"))?;
+        let json: Value = match serde_json::from_str(&trimmed) {
+            Ok(value) => value,
+            Err(err) => {
+                warnings.skip_line(&err.to_string());
+                continue;
+            }
+        };
 
         let line_type = json["type"].as_str().unwrap_or("unknown").to_string();
 
@@ -209,6 +220,10 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
 
     // Fill in duration / TTFT estimates after sequencing
     finalize_trajectory_timings(&mut events);
+
+    if let Some(summary) = warnings.summary() {
+        eprintln!("[trajectory] {}: {}", path.display(), summary);
+    }
 
     Ok((session_id, events))
 }
@@ -742,6 +757,43 @@ mod tests {
 
         let (sid, events) = parse_trajectory(&path).unwrap();
         assert_eq!(sid, "sess-empty");
+        assert!(events.is_empty());
+    }
+
+    // Session logs are appended incrementally, so a crashed run leaves a
+    // truncated last line. That must not sink the whole session.
+    #[test]
+    fn parse_skips_malformed_lines() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-bad\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hello\"},\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assist\n", // truncated
+                "not json at all\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"Hi!\"},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (sid, events) = parse_trajectory(&path).unwrap();
+        assert_eq!(sid, "sess-bad");
+        // The two valid messages survive; the two bad lines are dropped.
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "user-message");
+        assert_eq!(events[1].event_type, "assistant-message");
+        assert_eq!(events[1].content.as_deref(), Some("Hi!"));
+    }
+
+    #[test]
+    fn parse_survives_a_file_of_only_garbage() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, "garbage\nmore garbage\n").unwrap();
+
+        let (_sid, events) = parse_trajectory(&path).unwrap();
         assert!(events.is_empty());
     }
 }

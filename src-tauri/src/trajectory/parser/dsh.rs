@@ -21,7 +21,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms};
+use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms, ParseWarnings};
 use crate::trajectory::{ContentBlock, TrajectoryEvent};
 
 /// Accumulated streaming state for one assistant step (keyed by turn + step).
@@ -90,6 +90,7 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
     let mut chunk_states: HashMap<(usize, usize), StepChunkState> = HashMap::new();
     let mut current_turn = 0usize;
     let mut current_step = 0usize;
+    let mut warnings = ParseWarnings::default();
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -97,8 +98,13 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
             continue;
         }
 
-        let json: Value = serde_json::from_str(trimmed)
-            .map_err(|e| format!("Invalid JSON in DSH session: {e}"))?;
+        let json: Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
+            Err(err) => {
+                warnings.skip_line(&err.to_string());
+                continue;
+            }
+        };
 
         let line_type = json["type"].as_str().unwrap_or("").to_string();
         let ts = parse_dsh_timestamp(&json["time"]).unwrap_or(0);
@@ -193,7 +199,13 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                         .get(&(turn_key, current_step))
                         .and_then(|state| state.usage)
                 });
-                let (input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens) = usage
+                let (
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                ) = usage
                     .map(|usage| {
                         (
                             Some(usage.input),
@@ -404,46 +416,46 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
             }
 
             // Streaming chunks: accumulate first-token timing and usage so the
-                // following assistant/message can be annotated precisely.
-                "assistant/chunk" => {
-                    let data = &json["data"];
-                    let turn_key = data["turn"]
-                        .as_u64()
-                        .map(|value| value as usize)
-                        .unwrap_or(current_turn);
-                    let step_key = data["step"]
-                        .as_u64()
-                        .map(|value| value as usize)
-                        .unwrap_or(current_step);
-                    let chunk = &data["chunk"];
-                    let chunk_type = chunk["type"].as_str().unwrap_or("");
+            // following assistant/message can be annotated precisely.
+            "assistant/chunk" => {
+                let data = &json["data"];
+                let turn_key = data["turn"]
+                    .as_u64()
+                    .map(|value| value as usize)
+                    .unwrap_or(current_turn);
+                let step_key = data["step"]
+                    .as_u64()
+                    .map(|value| value as usize)
+                    .unwrap_or(current_step);
+                let chunk = &data["chunk"];
+                let chunk_type = chunk["type"].as_str().unwrap_or("");
 
-                    let state = chunk_states.entry((turn_key, step_key)).or_default();
-                    if state.first_chunk_ms.is_none() {
-                        state.first_chunk_ms = Some(ts);
-                    }
-                    // First visible output marks the first token.
-                    if state.first_token_ms.is_none() {
-                        let is_first_token = chunk_type == "text-delta"
-                            || (chunk_type == "block-end"
-                                && chunk["block"]["type"].as_str() == Some("text"))
-                            || (chunk_type == "block-end"
-                                && chunk["block"]["type"].as_str() == Some("tool-call"));
-                        if is_first_token {
-                            state.first_token_ms = Some(ts);
-                        }
-                    }
-                    if chunk_type == "usage" {
-                        if let Some(chunk_usage) = usage_from_value(&chunk["usage"]) {
-                            let usage = state.usage.get_or_insert(Usage::default());
-                            usage.input += chunk_usage.input;
-                            usage.output += chunk_usage.output;
-                            usage.reasoning += chunk_usage.reasoning;
-                            usage.cache_read += chunk_usage.cache_read;
-                            usage.cache_write += chunk_usage.cache_write;
-                        }
+                let state = chunk_states.entry((turn_key, step_key)).or_default();
+                if state.first_chunk_ms.is_none() {
+                    state.first_chunk_ms = Some(ts);
+                }
+                // First visible output marks the first token.
+                if state.first_token_ms.is_none() {
+                    let is_first_token = chunk_type == "text-delta"
+                        || (chunk_type == "block-end"
+                            && chunk["block"]["type"].as_str() == Some("text"))
+                        || (chunk_type == "block-end"
+                            && chunk["block"]["type"].as_str() == Some("tool-call"));
+                    if is_first_token {
+                        state.first_token_ms = Some(ts);
                     }
                 }
+                if chunk_type == "usage" {
+                    if let Some(chunk_usage) = usage_from_value(&chunk["usage"]) {
+                        let usage = state.usage.get_or_insert(Usage::default());
+                        usage.input += chunk_usage.input;
+                        usage.output += chunk_usage.output;
+                        usage.reasoning += chunk_usage.reasoning;
+                        usage.cache_read += chunk_usage.cache_read;
+                        usage.cache_write += chunk_usage.cache_write;
+                    }
+                }
+            }
 
             // Skip turn/step boundaries and other metadata
             "turn/start"
@@ -608,6 +620,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<crate::session_manager::SessionM
     let content = String::from_utf8(decompressed).map_err(|e| format!("Invalid UTF-8: {e}"))?;
 
     let mut messages = Vec::new();
+    let mut warnings = ParseWarnings::default();
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -615,8 +628,13 @@ pub fn load_messages(path: &Path) -> Result<Vec<crate::session_manager::SessionM
             continue;
         }
 
-        let json: Value =
-            serde_json::from_str(trimmed).map_err(|e| format!("Invalid JSON: {e}"))?;
+        let json: Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
+            Err(err) => {
+                warnings.skip_line(&err.to_string());
+                continue;
+            }
+        };
 
         let line_type = json["type"].as_str().unwrap_or("");
 
@@ -816,5 +834,29 @@ mod tests {
         let (sid, events) = parse_trajectory(&path).unwrap();
         assert_eq!(sid, "sess-empty");
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn parse_dsh_skips_malformed_lines() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl.zstd");
+
+        create_dsh_session(
+            &path,
+            &[
+                r#"{"type":"session","id":"sess-bad","createdAt":1787023345223,"cwd":"/tmp"}"#,
+                r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"content":[{"type":"text","text":"hello"}]}}"#,
+                r#"{"type":"assistant/message","seq":2,"time":1787"#, // truncated
+                "totally not json",
+                r#"{"type":"assistant/message","seq":3,"time":1787023347000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}]}}}"#,
+            ],
+        );
+
+        let (sid, events) = parse_trajectory(&path).unwrap();
+        assert_eq!(sid, "sess-bad");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "user-message");
+        assert_eq!(events[1].event_type, "assistant-message");
+        assert_eq!(events[1].content.as_deref(), Some("Hi!"));
     }
 }

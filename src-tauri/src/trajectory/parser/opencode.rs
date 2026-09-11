@@ -115,8 +115,7 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
     } else if path.is_dir() {
         // Message directory for this session (legacy cc-switch layout).
         load_messages_from_json_dir(path).and_then(|messages| {
-            let sid = session_id_from_dir(path)
-                .unwrap_or_else(|| "opencode-session".to_string());
+            let sid = session_id_from_dir(path).unwrap_or_else(|| "opencode-session".to_string());
             build_events(&sid, messages)
         })
     } else {
@@ -149,7 +148,11 @@ fn load_messages_from_json_dir(msg_dir: &Path) -> Result<Vec<MessageRecord>, Str
 
     let mut messages = Vec::new();
     for path in &files {
-        let value = read_json_file(path)?;
+        // A single corrupt/partial message file (opencode writes these
+        // incrementally) shouldn't sink the whole session.
+        let Ok(value) = read_json_file(path) else {
+            continue;
+        };
         if let Some(mut msg) = parse_message_json(&value, None, None) {
             // Attach this message's parts from storage/part/{message_id}/.
             let part_dir = storage.join("part").join(&msg.id);
@@ -219,6 +222,7 @@ fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<Message
         .map_err(|e| format!("Failed to query messages: {e}"))?;
     for row in msg_rows.flatten() {
         let (id, ts, data) = row;
+        // Skip rows whose JSON blob is corrupt rather than failing the session.
         if let Ok(value) = serde_json::from_str::<Value>(&data) {
             if let Some(mut msg) = parse_message_json(&value, Some(ts), Some(&id)) {
                 let mut parts = parts_map.remove(&id).unwrap_or_default();
@@ -243,9 +247,12 @@ fn parse_message_json(
     db_ts: Option<i64>,
     id_override: Option<&str>,
 ) -> Option<MessageRecord> {
-    let id = id_override
-        .map(|s| s.to_string())
-        .or_else(|| value.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))?;
+    let id = id_override.map(|s| s.to_string()).or_else(|| {
+        value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    })?;
     let role = value
         .get("role")
         .and_then(|v| v.as_str())
@@ -262,17 +269,29 @@ fn parse_message_json(
     let model = value
         .get("modelID")
         .and_then(|v| v.as_str())
-        .or_else(|| value.get("model").and_then(|m| m.get("modelID")).and_then(|v| v.as_str()))
+        .or_else(|| {
+            value
+                .get("model")
+                .and_then(|m| m.get("modelID"))
+                .and_then(|v| v.as_str())
+        })
         .map(|s| s.to_string());
     let provider = value
         .get("providerID")
         .and_then(|v| v.as_str())
-        .or_else(|| value.get("model").and_then(|m| m.get("providerID")).and_then(|v| v.as_str()))
+        .or_else(|| {
+            value
+                .get("model")
+                .and_then(|m| m.get("providerID"))
+                .and_then(|v| v.as_str())
+        })
         .map(|s| s.to_string());
 
     let tokens = value.get("tokens");
     let input_tokens = tokens.and_then(|t| t.get("input")).and_then(|v| v.as_i64());
-    let output_tokens = tokens.and_then(|t| t.get("output")).and_then(|v| v.as_i64());
+    let output_tokens = tokens
+        .and_then(|t| t.get("output"))
+        .and_then(|v| v.as_i64());
     let reasoning_tokens = tokens
         .and_then(|t| t.get("reasoning"))
         .and_then(|v| v.as_i64());
@@ -302,7 +321,11 @@ fn parse_message_json(
 
 /// Parse one part JSON object into a PartRecord.
 fn parse_part_json(value: &Value, db_ts: Option<i64>) -> Option<PartRecord> {
-    let part_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let part_type = value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let (time_start, time_end) = match part_type.as_str() {
         "text" | "reasoning" => (
@@ -332,9 +355,18 @@ fn parse_part_json(value: &Value, db_ts: Option<i64>) -> Option<PartRecord> {
 
     Some(PartRecord {
         part_type,
-        text: value.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        tool_name: value.get("tool").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        call_id: value.get("callID").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        text: value
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        tool_name: value
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        call_id: value
+            .get("callID")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         tool_state: value.get("state").cloned().filter(|s| s.is_object()),
         time_start: time_start.or(db_ts),
         time_end,
@@ -398,10 +430,7 @@ fn push_user_events(
         .filter(|p| p.part_type == "text")
         .filter_map(|p| p.text.clone().filter(|t| !t.trim().is_empty()))
         .collect();
-    let tool_parts: Vec<&PartRecord> = parts
-        .iter()
-        .filter(|p| p.part_type == "tool")
-        .collect();
+    let tool_parts: Vec<&PartRecord> = parts.iter().filter(|p| p.part_type == "tool").collect();
 
     if text_parts.is_empty() && tool_parts.is_empty() {
         return; // service / summary-only message
@@ -434,7 +463,10 @@ fn push_user_events(
             tool_call_id: call_id,
             tool_name,
             tool_args: args,
-            tool_result: state.and_then(|s| s.get("output")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+            tool_result: state
+                .and_then(|s| s.get("output"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             is_error: tool_status_is_error(state),
             turn: Some(*current_turn),
             step: Some(*current_step),
@@ -539,10 +571,8 @@ fn push_assistant_events(
                     .map(|i| serde_json::to_string(i).unwrap_or_default());
 
                 if let (Some(id), Some(name)) = (&call_id, &tool_name) {
-                    tool_call_tracker.insert(
-                        id.clone(),
-                        (name.clone(), args.clone().unwrap_or_default()),
-                    );
+                    tool_call_tracker
+                        .insert(id.clone(), (name.clone(), args.clone().unwrap_or_default()));
                 }
 
                 // Tool-call event (request, at state start).
@@ -580,7 +610,11 @@ fn push_assistant_events(
                     .map(|s| s.to_string());
                 events.push(TrajectoryEvent {
                     seq: *seq,
-                    ts: part.time_end.or(part.time_start).or(Some(msg.created)).unwrap_or_default(),
+                    ts: part
+                        .time_end
+                        .or(part.time_start)
+                        .or(Some(msg.created))
+                        .unwrap_or_default(),
                     event_type: "tool-result".to_string(),
                     role: Some("tool".to_string()),
                     content: None,
@@ -761,7 +795,11 @@ fn scan_sessions_sqlite(base: &Path) -> Vec<SessionMeta> {
                 Some(title)
             };
             let project_group = project_group_from_dir(&directory);
-            let project_dir = if directory.is_empty() { None } else { Some(directory) };
+            let project_dir = if directory.is_empty() {
+                None
+            } else {
+                Some(directory)
+            };
             SessionMeta {
                 provider_id: "opencode".to_string(),
                 session_id: session_id.clone(),
@@ -806,7 +844,10 @@ fn parse_session_meta(storage: &Path, path: &Path) -> Option<SessionMeta> {
         .and_then(|v| v.as_i64());
 
     let display_title = title.or_else(|| {
-        directory.as_deref().and_then(path_basename).map(|s| s.to_string())
+        directory
+            .as_deref()
+            .and_then(path_basename)
+            .map(|s| s.to_string())
     });
     let summary = if display_title.is_some() {
         // OpenCode has no per-message /summary in the session store; the
@@ -822,7 +863,7 @@ fn parse_session_meta(storage: &Path, path: &Path) -> Option<SessionMeta> {
         title: display_title,
         summary,
         project_dir: directory.clone(),
-        project_group: project_group_from_dir(&directory.as_deref().unwrap_or_default()),
+        project_group: project_group_from_dir(directory.as_deref().unwrap_or_default()),
         created_at,
         last_active_at: updated_at.or(created_at),
         source_path: Some(path.to_string_lossy().to_string()),
@@ -904,9 +945,8 @@ pub fn load_messages(source: &str) -> Result<Vec<SessionMessage>, String> {
         path.to_path_buf()
     } else {
         let session_id = read_session_id(path)?;
-        let storage = find_storage_root(path).ok_or_else(|| {
-            format!("Cannot locate OpenCode storage for {}", path.display())
-        })?;
+        let storage = find_storage_root(path)
+            .ok_or_else(|| format!("Cannot locate OpenCode storage for {}", path.display()))?;
         storage.join("message").join(&session_id)
     };
 
@@ -989,7 +1029,11 @@ pub fn is_session_store_dir(dir: &Path) -> bool {
 
 /// Locate the OpenCode `storage` root that contains `path` (walking up).
 fn opencode_storage_of(path: &Path) -> Option<PathBuf> {
-    let mut dir = if path.is_dir() { Some(path.to_path_buf()) } else { path.parent().map(Path::to_path_buf) };
+    let mut dir = if path.is_dir() {
+        Some(path.to_path_buf())
+    } else {
+        path.parent().map(Path::to_path_buf)
+    };
     while let Some(candidate) = dir {
         if candidate.join("message").is_dir()
             && candidate.join("part").is_dir()
@@ -1016,9 +1060,8 @@ fn delete_session_json(path: &Path) -> Result<(), String> {
     let storage = opencode_storage_of(path)
         .ok_or_else(|| format!("Cannot locate OpenCode storage for {}", path.display()))?;
 
-    let base = get_opencode_base_dir()
-        .ok_or_else(|| "OpenCode directory not found".to_string())?;
-    if !path.starts_with(&base.join("storage")) {
+    let base = get_opencode_base_dir().ok_or_else(|| "OpenCode directory not found".to_string())?;
+    if !path.starts_with(base.join("storage")) {
         return Err("Refusing to delete outside OpenCode storage".to_string());
     }
 
@@ -1039,7 +1082,9 @@ fn delete_session_json(path: &Path) -> Result<(), String> {
     }
 
     // session_diff summary + the message directory itself.
-    let diff = storage.join("session_diff").join(format!("{session_id}.json"));
+    let diff = storage
+        .join("session_diff")
+        .join(format!("{session_id}.json"));
     if diff.exists() {
         std::fs::remove_file(&diff).map_err(|e| format!("Failed to delete session diff: {e}"))?;
     }
@@ -1096,9 +1141,8 @@ fn delete_session_sqlite(db_path: &Path, session_id: &str) -> Result<(), String>
 pub fn delete_sessions_in_dir(dir: &Path) -> Result<usize, String> {
     opencode_storage_of(dir)
         .ok_or_else(|| format!("Cannot locate OpenCode storage for {}", dir.display()))?;
-    let base = get_opencode_base_dir()
-        .ok_or_else(|| "OpenCode directory not found".to_string())?;
-    if !dir.starts_with(&base.join("storage")) {
+    let base = get_opencode_base_dir().ok_or_else(|| "OpenCode directory not found".to_string())?;
+    if !dir.starts_with(base.join("storage")) {
         return Err("Refusing to delete outside OpenCode storage".to_string());
     }
 
@@ -1207,7 +1251,6 @@ pub(crate) fn opencode_env_lock() -> &'static std::sync::Mutex<()> {
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::sync::Mutex;
     use tempfile::tempdir;
 
     fn write_file(path: &Path, contents: &str) {
@@ -1302,6 +1345,27 @@ mod tests {
         assert!(msgs[1].content.contains("[Tool: bash]"));
         assert!(msgs[1].content.contains("Here you go"));
         assert_eq!(msgs[0].ts, Some(1000));
+    }
+
+    // A single corrupt message file must not sink the whole session.
+    #[test]
+    fn parse_skips_corrupt_message_files() {
+        let dir = tempdir().unwrap();
+        let storage = dir.path().join("storage");
+        build_json_layout(&storage);
+        // Drop a truncated message file next to the good ones.
+        write_file(
+            &storage.join("message/ses_1/msg_bad.json"),
+            r#"{"id":"msg_bad","role":"assistant","time":{"crea"#,
+        );
+        let session_file = storage.join("session/project-1/ses_1.json");
+
+        let (sid, events) = parse_trajectory(&session_file).unwrap();
+        assert_eq!(sid, "ses_1");
+        // The two good messages still parse.
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].event_type, "user-message");
+        assert_eq!(events[3].event_type, "assistant-message");
     }
 
     fn setup_sqlite(db: &Path) {
@@ -1451,8 +1515,14 @@ mod tests {
         println!("sid={sid} events={}", events.len());
         assert!(!events.is_empty());
         assert_eq!(sid, "ses_3c89ad158ffehsPfY3RNV6GvUM");
-        let tool_calls = events.iter().filter(|e| e.event_type == "tool-call").count();
-        let asst = events.iter().filter(|e| e.event_type == "assistant-message").count();
+        let tool_calls = events
+            .iter()
+            .filter(|e| e.event_type == "tool-call")
+            .count();
+        let asst = events
+            .iter()
+            .filter(|e| e.event_type == "assistant-message")
+            .count();
         println!("tool-calls={tool_calls} assistant={asst}");
         assert!(tool_calls > 0);
     }
@@ -1475,7 +1545,11 @@ mod tests {
             .unwrap();
         let source = newest.source_path.as_deref().unwrap();
         let (sid, events) = parse_trajectory(Path::new(source)).unwrap();
-        println!("top session: {sid} ({}) events={}", newest.title.as_deref().unwrap_or(""), events.len());
+        println!(
+            "top session: {sid} ({}) events={}",
+            newest.title.as_deref().unwrap_or(""),
+            events.len()
+        );
         assert_eq!(sid, newest.session_id);
         let msgs = load_messages(source).unwrap();
         println!("messages={}", msgs.len());
@@ -1499,7 +1573,9 @@ mod tests {
             events.len()
         );
 
-        let mut out = String::from("seq\ttype\trole\tts\tturn\tstep\ttool\tcontentLen\targsLen\tresultLen\tblocks\n");
+        let mut out = String::from(
+            "seq\ttype\trole\tts\tturn\tstep\ttool\tcontentLen\targsLen\tresultLen\tblocks\n",
+        );
         for e in &events[..events.len().min(60)] {
             out.push_str(&format!(
                 "{}\t{}\t{}\t{}\t{:?}\t{:?}\t{}\t{}\t{}\t{}\t{}\n",
@@ -1526,9 +1602,11 @@ mod tests {
 
         let huge = events
             .iter()
-            .filter(|e| e.content.as_ref().map(|s| s.len()).unwrap_or(0) > 100_000
-                || e.tool_args.as_ref().map(|s| s.len()).unwrap_or(0) > 100_000
-                || e.tool_result.as_ref().map(|s| s.len()).unwrap_or(0) > 100_000)
+            .filter(|e| {
+                e.content.as_ref().map(|s| s.len()).unwrap_or(0) > 100_000
+                    || e.tool_args.as_ref().map(|s| s.len()).unwrap_or(0) > 100_000
+                    || e.tool_result.as_ref().map(|s| s.len()).unwrap_or(0) > 100_000
+            })
             .collect::<Vec<_>>();
         println!("events with >100KB payload: {}", huge.len());
     }

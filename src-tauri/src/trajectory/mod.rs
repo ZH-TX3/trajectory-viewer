@@ -168,7 +168,9 @@ pub fn detect_provider(path: &Path) -> Result<String, String> {
         // OpenCode session file: `{id: "ses_...", directory, time: {...}}`.
         // Checked last so it can't shadow the Claude/Codex/DSH detectors.
         let opencode_id = json["id"].as_str();
-        let is_opencode = opencode_id.map(|id| id.starts_with("ses_")).unwrap_or(false)
+        let is_opencode = opencode_id
+            .map(|id| id.starts_with("ses_"))
+            .unwrap_or(false)
             && (json["directory"].as_str().is_some()
                 || !json["time"]["created"].is_null()
                 || json["version"].as_str().is_some());

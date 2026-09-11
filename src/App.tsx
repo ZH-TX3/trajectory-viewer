@@ -151,10 +151,21 @@ export function App() {
       )}
 
       {/* Main content */}
+      {/*
+        Both views stay MOUNTED and are toggled with CSS instead of being
+        unmounted — SessionBrowser holds the whole session list, the selected
+        session and its parsed messages/trajectory. Unmounting on the way to
+        Settings threw all of that away, so coming back re-scanned and
+        re-loaded everything. Keeping it mounted makes Back instant.
+      */}
       <main className="flex-1 min-h-0">
-        {mode === 'browser' && (
-          <SessionBrowser onOpenFile={handleFileOpen} enabledProviders={enabledProviders} providerOrder={providerOrder} />
-        )}
+        <div className={mode === 'browser' ? 'h-full' : 'hidden'}>
+          <SessionBrowser
+            onOpenFile={handleFileOpen}
+            enabledProviders={enabledProviders}
+            providerOrder={providerOrder}
+          />
+        </div>
 
         {mode === 'settings' && (
           <SettingsView

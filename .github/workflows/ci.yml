@@ -47,6 +47,9 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit
 
+      - name: Unit tests
+        run: pnpm test
+
       - name: Build frontend
         run: pnpm build:web
 

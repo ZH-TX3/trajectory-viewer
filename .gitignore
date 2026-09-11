@@ -5,6 +5,10 @@ node_modules/
 dist/
 build/
 
+# Test output
+.vitest/
+coverage/
+
 # Rust build output
 src-tauri/target/
 

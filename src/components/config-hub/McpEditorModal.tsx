@@ -9,7 +9,7 @@ import { Loader2 } from 'lucide-react';
 import type { McpEditorState, McpServerType } from '../../types';
 import { TOOL_ACTIVE_CLASSES } from '../../utils/configHub';
 import { cn } from '../../lib/utils';
-import { ToolBadge } from './BrandIcons';
+import { ToolBadge } from '../icons/BrandIcons';
 
 interface McpEditorModalProps {
   editor: McpEditorState;
@@ -179,7 +179,7 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
                         : 'opacity-40 hover:opacity-80',
                     )}
                   >
-                    <ToolBadge toolId={toolId} label={toolLabel(toolId)} size={14} />
+                    <ToolBadge toolId={toolId} label={toolLabel(toolId)} className="size-3.5" />
                   </button>
                 );
               })}

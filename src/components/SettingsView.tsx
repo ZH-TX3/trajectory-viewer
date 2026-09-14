@@ -24,7 +24,8 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ArrowLeft, Settings, GripVertical } from 'lucide-react';
+import { ArrowLeft, GripVertical } from 'lucide-react';
+import { ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware } from './icons/BrandIcons';
 import { cn } from '../lib/utils';
 import { BackupSection } from './BackupSection';
 import { TrashSection } from './TrashSection';
@@ -102,6 +103,7 @@ function SortableRow({
       />
       <div className="flex-1 min-w-0">
         <div className="text-sm flex items-center gap-2">
+          <ProviderGlyph id={opt.id} className="size-4 shrink-0" />
           {opt.label}
           {!opt.supported && (
             <span className="text-[9px] px-1 py-0.5 rounded bg-muted/60 text-muted-foreground">not yet</span>
@@ -111,6 +113,14 @@ function SortableRow({
       </div>
     </div>
   );
+}
+
+/** Brand icon for a provider row, sized to the label line. */
+function ProviderGlyph({ id, className }: { id: string; className?: string }) {
+  if (id === 'claude') return <ClaudeMark className={className} />;
+  if (id === 'dsh') return <DshMark className={className} />;
+  if (id === 'opencode') return <OpenCodeLogoDarkAware className={className} />;
+  return <CodexMark className={className} />;
 }
 
 export function SettingsView({

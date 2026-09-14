@@ -10,6 +10,9 @@ import { TrajectoryView } from './TrajectoryView';
 import { TrajectoryErrorBoundary } from './TrajectoryErrorBoundary';
 import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import {
+  ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware,
+} from './icons/BrandIcons';
+import {
   MessageSquare, GitBranch, Clock, FileText, Loader2,
   ChevronRight, ChevronDown, Folder, FolderOpen, GripVertical,
   Pencil, Trash2, Copy, Check, RotateCw, Download,
@@ -38,16 +41,17 @@ function resumeCommandFor(session: SessionMeta | null): string {
 }
 
 // Filter chips: same shape as the settings toggle, rendered from one array.
+// Icons are the shared brand marks; each chip tints the active state.
 const PROVIDER_CHIPS: Array<{
   id: Exclude<ProviderFilter, 'all'>;
   label: string;
   icon: FC<{ className?: string }>;
   active: string;
 }> = [
-  { id: 'claude', label: 'Claude', icon: ClaudeIcon, active: 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 shadow-sm' },
-  { id: 'codex', label: 'Codex', icon: CodexIcon, active: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 shadow-sm' },
-  { id: 'dsh', label: 'DSH', icon: DshIcon, active: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 shadow-sm' },
-  { id: 'opencode', label: 'OpenCode', icon: OpenCodeIcon, active: 'bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 shadow-sm' },
+  { id: 'claude', label: 'Claude', icon: ClaudeMark, active: 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 shadow-sm' },
+  { id: 'codex', label: 'Codex', icon: CodexMark, active: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 shadow-sm' },
+  { id: 'dsh', label: 'DSH', icon: DshMark, active: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 shadow-sm' },
+  { id: 'opencode', label: 'OpenCode', icon: OpenCodeLogoDarkAware, active: 'bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 shadow-sm' },
 ];
 
 interface SessionBrowserProps {
@@ -59,49 +63,6 @@ interface SessionBrowserProps {
 
 type Tab = 'messages' | 'trajectory';
 type ProviderFilter = 'all' | 'claude' | 'codex' | 'dsh' | 'opencode';
-
-// ── Provider Icons ───────────────────────────────────────────────────────
-
-function ClaudeIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <circle cx="16" cy="16" r="14" fill="currentColor" opacity="0.15" />
-      <path d="M10 20c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-      <circle cx="20" cy="12" r="1.5" fill="currentColor" />
-    </svg>
-  );
-}
-
-function CodexIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <rect x="4" y="4" width="24" height="24" rx="6" fill="currentColor" opacity="0.15" />
-      <path d="M12 20l4-4-4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M18 20h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function DshIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <rect x="6" y="6" width="20" height="20" rx="4" fill="currentColor" opacity="0.12" />
-      <path d="M10 16l4-4 4 4-4 4-4-4z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-      <path d="M18 18h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function OpenCodeIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <circle cx="16" cy="16" r="14" fill="currentColor" opacity="0.12" />
-      <rect x="10" y="10" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.8" />
-      <circle cx="16" cy="16" r="2" fill="currentColor" />
-    </svg>
-  );
-}
 
 // ── Group entry ──────────────────────────────────────────────────────────
 
@@ -463,10 +424,10 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   };
 
   const providerGlyph = (id: string, size = 'size-3.5') => {
-    if (id === 'claude') return <ClaudeIcon className={size} />;
-    if (id === 'dsh') return <DshIcon className={size} />;
-    if (id === 'opencode') return <OpenCodeIcon className={size} />;
-    return <CodexIcon className={size} />;
+    if (id === 'claude') return <ClaudeMark className={size} />;
+    if (id === 'dsh') return <DshMark className={size} />;
+    if (id === 'opencode') return <OpenCodeLogoDarkAware className={size} />;
+    return <CodexMark className={size} />;
   };
 
   // Filter chips follow the settings-defined display order.

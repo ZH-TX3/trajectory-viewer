@@ -25,6 +25,8 @@ pub mod state;
 pub mod sync;
 pub mod utils;
 
+use std::path::PathBuf;
+
 use serde::Serialize;
 
 use registry::{providers, ConfigFormat};
@@ -147,6 +149,41 @@ fn read_config(label: &str, path: std::path::PathBuf, format: ConfigFormat) -> C
     }
 }
 
+/// Every path a tool lets us edit: its prompt file and its declared configs.
+fn editable_paths(tool_id: &str) -> Vec<PathBuf> {
+    let Some(tool) = registry::provider(tool_id) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = tool
+        .config_files()
+        .into_iter()
+        .map(|f| PathBuf::from(f.path))
+        .collect();
+    if let Some(prompt) = tool.prompt_file() {
+        paths.push(prompt);
+    }
+    paths
+}
+
+/// Write one of a tool's own prompt/config files.
+///
+/// Refuses any path the tool doesn't declare, so a malformed request can never
+/// write outside the tool's known config surface. The parent directory is
+/// created when missing (some tools ship without their config file yet).
+pub fn save_config_file(tool_id: &str, path: &str, content: &str) -> Result<(), String> {
+    let target = PathBuf::from(path);
+    let allowed = editable_paths(tool_id);
+    if !allowed.iter().any(|p| p == &target) {
+        return Err(format!(
+            "Refusing to write a file {tool_id} does not own: {path}"
+        ));
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create dir: {e}"))?;
+    }
+    std::fs::write(&target, content).map_err(|e| format!("Cannot write {path}: {e}"))
+}
+
 /// Parse a `<kind>:<name>` resource id.
 pub fn split_id(id: &str) -> Result<(ResourceKind, String), String> {
     let (kind, name) = id
@@ -210,6 +247,15 @@ pub fn config_hub_undo_import(id: String, tool_id: String) -> Result<(), String>
 pub fn config_hub_delete(id: String) -> Result<String, String> {
     let (kind, name) = split_id(&id)?;
     migrate::delete_resource(kind, &name)
+}
+
+#[tauri::command]
+pub fn config_hub_save_config(
+    tool_id: String,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    save_config_file(&tool_id, &path, &content)
 }
 
 // ── MCP commands ─────────────────────────────────────────────────────────
@@ -283,6 +329,58 @@ mod tests {
         let (kind, name) = split_id("skill:a:b").unwrap();
         assert_eq!(kind, ResourceKind::Skill);
         assert_eq!(name, "a:b");
+    }
+
+    #[test]
+    fn save_config_writes_a_declared_file() {
+        let _guard = crate::trajectory::parser::opencode::opencode_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let original = std::env::var_os("HOME");
+        #[allow(deprecated)]
+        std::env::set_var("HOME", &home);
+
+        let target = home.join(".claude/CLAUDE.md");
+        save_config_file("claude", &target.to_string_lossy(), "# hello").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "# hello");
+
+        #[allow(deprecated)]
+        match original {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    // The whole point of the guard: a request naming an arbitrary path must be
+    // rejected, so a malformed call can't write outside the tool's own config.
+    #[test]
+    fn save_config_refuses_undeclared_paths() {
+        let _guard = crate::trajectory::parser::opencode::opencode_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let original = std::env::var_os("HOME");
+        #[allow(deprecated)]
+        std::env::set_var("HOME", &home);
+
+        let outsider = home.join("elsewhere/evil.txt");
+        let err = save_config_file("claude", &outsider.to_string_lossy(), "x").unwrap_err();
+        assert!(err.contains("does not own"), "got: {err}");
+        assert!(!outsider.exists(), "nothing written");
+
+        // An unknown tool is refused too.
+        assert!(save_config_file("nope", "/tmp/x", "x").is_err());
+
+        #[allow(deprecated)]
+        match original {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]

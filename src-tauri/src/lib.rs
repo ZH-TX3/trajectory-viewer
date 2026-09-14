@@ -41,6 +41,7 @@ pub fn run() {
             config_hub::config_hub_import,
             config_hub::config_hub_undo_import,
             config_hub::config_hub_delete,
+            config_hub::config_hub_save_config,
             config_hub::config_hub_mcp_list,
             config_hub::config_hub_mcp_upsert,
             config_hub::config_hub_mcp_toggle,

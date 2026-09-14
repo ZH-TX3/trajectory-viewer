@@ -11,7 +11,7 @@ import type { McpEditorState, McpServer } from '../../types';
 import { TOOL_ACTIVE_CLASSES, editorToMcp, entriesToString } from '../../utils/configHub';
 import { cn } from '../../lib/utils';
 import { McpEditorModal } from './McpEditorModal';
-import { ToolBadge } from './BrandIcons';
+import { ToolBadge } from '../icons/BrandIcons';
 
 interface Notice {
   type: 'ok' | 'error';
@@ -271,7 +271,7 @@ export function McpPanel() {
                         {busy ? (
                           <Loader2 className="size-3.5 animate-spin" />
                         ) : (
-                          <ToolBadge toolId={toolId} size={14} />
+                          <ToolBadge toolId={toolId} className="size-3.5" />
                         )}
                       </button>
                     );

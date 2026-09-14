@@ -268,8 +268,10 @@ export function ConfigHubView() {
           </div>
         )}
 
-        {/* Prompts & config tab (read-only) */}
-        {tab === 'prompts' && snapshot && <ConfigReadonlyPanel configs={snapshot.configs} />}
+        {/* Prompts & config tab (editable) */}
+        {tab === 'prompts' && snapshot && (
+          <ConfigReadonlyPanel configs={snapshot.configs} onSaved={() => void refresh()} />
+        )}
 
         {/* Not-installed warning */}
         {!loading && tools.some((t) => !t.installed) && (

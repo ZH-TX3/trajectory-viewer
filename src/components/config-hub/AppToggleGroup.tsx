@@ -10,7 +10,7 @@
 import { Loader2 } from 'lucide-react';
 import type { AppState, ConfigResource, ToolInfo } from '../../types';
 import { APP_STATE_LABELS, TOOL_ACTIVE_CLASSES } from '../../utils/configHub';
-import { ToolBadge } from './BrandIcons';
+import { ToolBadge } from '../icons/BrandIcons';
 import { cn } from '../../lib/utils';
 
 interface AppToggleGroupProps {
@@ -53,7 +53,7 @@ export function AppToggleGroup({
               {busy ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
-                <ToolBadge toolId={tool.id} size={14} />
+                <ToolBadge toolId={tool.id} className="size-3.5" />
               )}
             </button>
           );
@@ -74,7 +74,7 @@ export function AppToggleGroup({
                 : 'opacity-40 hover:opacity-80',
             )}
           >
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ToolBadge toolId={tool.id} size={14} />}
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ToolBadge toolId={tool.id} className="size-3.5" />}
           </button>
         );
       })}

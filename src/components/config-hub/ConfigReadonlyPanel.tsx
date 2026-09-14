@@ -1,40 +1,41 @@
-// ── Config Hub: read-only config panel ───────────────────────────────────
+// ── Config Hub: prompts & config panel ───────────────────────────────────
 //
-// Shows each tool's system prompt and config files. This stage is display
-// only — nothing here writes — so the panel says so plainly and shows a tool's
-// installed state rather than an empty box when the tool is missing.
+// Each tool's system prompt and config files. Files can be viewed and edited
+// in place; saving goes through the backend, which only accepts paths the tool
+// itself declares. A tool that isn't installed shows a plain notice instead of
+// an empty box.
 
-import { useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { Check, ChevronDown, ChevronRight, Loader2, Pencil, RotateCcw, X } from 'lucide-react';
 import type { ConfigFileContent, ToolConfigs } from '../../types';
+import { api } from '../../api';
 import { cn } from '../../lib/utils';
+import { ToolIcon } from '../icons/BrandIcons';
 
-interface ConfigReadonlyPanelProps {
+interface ConfigPanelProps {
   configs: ToolConfigs[];
+  onSaved: () => void;
 }
 
-export function ConfigReadonlyPanel({ configs }: ConfigReadonlyPanelProps) {
+export function ConfigReadonlyPanel({ configs, onSaved }: ConfigPanelProps) {
   return (
     <div className="space-y-2">
       <div className="text-[11px] text-muted-foreground">
-        System prompts and config files. Display only — editing arrives in a later stage.
+        Each tool's system prompt and config files. Editing writes straight to the file.
       </div>
       {configs.map((tool) => (
-        <ToolConfigCard key={tool.toolId} tool={tool} />
+        <ToolConfigCard key={tool.toolId} tool={tool} onSaved={onSaved} />
       ))}
     </div>
   );
 }
 
-function ToolConfigCard({ tool }: { tool: ToolConfigs }) {
+function ToolConfigCard({ tool, onSaved }: { tool: ToolConfigs; onSaved: () => void }) {
   const [open, setOpen] = useState(false);
-  const files: ConfigFileContent[] = [
-    ...(tool.prompt ? [tool.prompt] : []),
-    ...tool.files,
-  ];
+  const files: ConfigFileContent[] = [...(tool.prompt ? [tool.prompt] : []), ...tool.files];
 
   return (
-    <div className="rounded-lg border border-border/40">
+    <div className="rounded-lg border border-[hsl(var(--border))]">
       <button
         onClick={() => setOpen((v) => !v)}
         disabled={!tool.installed}
@@ -45,20 +46,25 @@ function ToolConfigCard({ tool }: { tool: ToolConfigs }) {
         ) : (
           <ChevronRight className="size-3 text-muted-foreground" />
         )}
+        <ToolIcon toolId={tool.toolId} className="size-3.5" />
         <span className="text-xs font-medium">{tool.displayName}</span>
         <span className="ml-auto text-[10px] text-muted-foreground">
-          {tool.installed ? `${files.filter((f) => f.exists).length}/${files.length} files` : 'not installed'}
+          {tool.installed
+            ? `${files.filter((f) => f.exists).length}/${files.length} files`
+            : 'not installed'}
         </span>
       </button>
 
       {open && (
-        <div className="border-t border-border/40 divide-y divide-border/40">
+        <div className="border-t border-[hsl(var(--border))] divide-y divide-[hsl(var(--border))]">
           {!tool.installed ? (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">
               {tool.displayName} is not installed — nothing to show.
             </div>
           ) : (
-            files.map((file) => <FileBlock key={file.path} file={file} />)
+            files.map((file) => (
+              <FileBlock key={file.path} toolId={tool.toolId} file={file} onSaved={onSaved} />
+            ))
           )}
         </div>
       )}
@@ -66,40 +72,165 @@ function ToolConfigCard({ tool }: { tool: ToolConfigs }) {
   );
 }
 
-function FileBlock({ file }: { file: ConfigFileContent }) {
+function FileBlock({
+  toolId,
+  file,
+  onSaved,
+}: {
+  toolId: string;
+  file: ConfigFileContent;
+  onSaved: () => void;
+}) {
+  const original = file.content ?? '';
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(original);
   const [expanded, setExpanded] = useState(false);
-  const content = file.content ?? '';
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const startEdit = useCallback(() => {
+    setDraft(original);
+    setError(null);
+    setEditing(true);
+  }, [original]);
+
+  const cancel = useCallback(() => {
+    setEditing(false);
+    setDraft(original);
+    setError(null);
+  }, [original]);
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.configHubSaveConfig(toolId, file.path, draft);
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  }, [toolId, file.path, draft, onSaved]);
+
+  const dirty = draft !== original;
 
   return (
     <div className="px-3 py-2">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-[11px] font-medium">{file.label}</span>
-        <span className="text-[9px] uppercase tracking-wide text-muted-foreground/70 border border-border/40 rounded px-1">
-          read-only
-        </span>
-        {!file.exists && <span className="text-[10px] text-muted-foreground">missing</span>}
-        {file.exists && content.length > 400 && (
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="ml-auto text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
-          >
-            {expanded ? 'collapse' : 'expand'}
-          </button>
-        )}
+        <StatusBadge exists={file.exists} dirty={dirty} editing={editing} />
+
+        <div className="ml-auto flex items-center gap-1">
+          {editing ? (
+            <>
+              <button
+                onClick={() => void save()}
+                disabled={saving || !dirty}
+                title="Save"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
+                Save
+              </button>
+              <button
+                onClick={() => setDraft(original)}
+                disabled={saving || !dirty}
+                title="Revert changes"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-40"
+              >
+                <RotateCcw className="size-3" />
+              </button>
+              <button
+                onClick={cancel}
+                disabled={saving}
+                title="Cancel"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-40"
+              >
+                <X className="size-3" />
+              </button>
+            </>
+          ) : (
+            <>
+              {file.exists && file.content && file.content.length > 400 && (
+                <button
+                  onClick={() => setExpanded((v) => !v)}
+                  className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  {expanded ? 'collapse' : 'expand'}
+                </button>
+              )}
+              <button
+                onClick={startEdit}
+                title="Edit"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+              >
+                <Pencil className="size-3" />
+              </button>
+            </>
+          )}
+        </div>
       </div>
+
       <div className="text-[10px] text-muted-foreground font-mono break-all mb-1">{file.path}</div>
-      {file.exists ? (
+
+      {error && (
+        <div className="mb-1 px-2 py-1 rounded text-[10px] bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 break-all">
+          {error}
+        </div>
+      )}
+
+      {editing ? (
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          spellCheck={false}
+          className="w-full text-[10px] leading-relaxed font-mono bg-transparent border border-[hsl(var(--border))] rounded p-2 h-[70vh] min-h-64 resize-y focus:outline-none focus:ring-1 focus:ring-blue-400"
+        />
+      ) : file.exists ? (
         <pre
           className={cn(
             'text-[10px] leading-relaxed whitespace-pre-wrap break-all rounded bg-muted/30 p-2 overflow-auto',
             expanded ? 'max-h-96' : 'max-h-24',
           )}
         >
-          {content || '(empty)'}
+          {original || '(empty)'}
         </pre>
       ) : (
-        <div className="text-[10px] text-muted-foreground">File does not exist.</div>
+        <div className="text-[10px] text-muted-foreground">
+          File does not exist. Click edit to create it.
+        </div>
       )}
     </div>
+  );
+}
+
+/** Small status chip: editing / unsaved / missing / editable. */
+function StatusBadge({
+  exists,
+  dirty,
+  editing,
+}: {
+  exists: boolean;
+  dirty: boolean;
+  editing: boolean;
+}) {
+  const label = editing ? (dirty ? 'unsaved' : 'editing') : exists ? 'editable' : 'missing';
+  return (
+    <span
+      className={cn(
+        'text-[9px] uppercase tracking-wide rounded px-1 py-0.5 border',
+        editing
+          ? dirty
+            ? 'border-amber-500/50 text-amber-600 dark:text-amber-400'
+            : 'border-blue-500/50 text-blue-600 dark:text-blue-400'
+          : exists
+            ? 'border-blue-500/40 text-blue-600 dark:text-blue-400'
+            : 'border-border/50 text-muted-foreground',
+      )}
+    >
+      {label}
+    </span>
   );
 }

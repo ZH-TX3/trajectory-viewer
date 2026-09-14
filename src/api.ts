@@ -173,6 +173,11 @@ export const api = {
     return await invoke('config_hub_delete', { id });
   },
 
+  /** Write one of a tool's own prompt/config files. */
+  async configHubSaveConfig(toolId: string, path: string, content: string): Promise<void> {
+    return await invoke('config_hub_save_config', { toolId, path, content });
+  },
+
   // ── Config Hub: MCP ────────────────────────────────────────────────────
 
   /** List every MCP server in the unified store. */

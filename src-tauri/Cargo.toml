@@ -1,6 +1,6 @@
 [package]
 name = "trajectory-viewer"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "DSH Trajectory Viewer — AI session log timeline visualizer"
 authors = ["DSH Team"]

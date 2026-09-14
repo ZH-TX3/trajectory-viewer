@@ -95,12 +95,6 @@ fn parse_sqlite_source(source: &str) -> Option<(PathBuf, String)> {
     Some((db_path, session_id))
 }
 
-/// `true` when `source_path` references the SQLite database rather than a
-/// flat session file.
-pub fn is_sqlite_source(source: &str) -> bool {
-    source.starts_with(DB_SOURCE_PREFIX)
-}
-
 // ── Trajectory parsing ───────────────────────────────────────────────────
 
 /// Parse an OpenCode session into trajectory events.
@@ -1008,18 +1002,6 @@ fn collect_message_text(msg: &MessageRecord) -> String {
 // ── Low-level helpers ────────────────────────────────────────────────────
 
 // ── Deletion support ─────────────────────────────────────────────────────
-
-/// `true` when `source` refers to OpenCode session data we manage (either a
-/// `sqlite:` reference or a session JSON file inside `storage/session/`).
-pub fn is_opencode_source(source: &str) -> bool {
-    if is_sqlite_source(source) {
-        return true;
-    }
-    let path = Path::new(source);
-    path.is_file()
-        && path.extension().and_then(|e| e.to_str()) == Some("json")
-        && opencode_storage_of(path).is_some()
-}
 
 /// `true` when `dir` is a directory inside OpenCode storage (for bulk
 /// deletes of a project's session files).

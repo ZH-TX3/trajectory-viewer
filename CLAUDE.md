@@ -39,37 +39,48 @@ trajectory-viewer/
 │   └── src/
 │       ├── main.rs               # Binary entry point
 │       ├── lib.rs                # Tauri app builder + command registration
-│       ├── commands.rs           # Tauri commands (4 total)
-│       ├── session_manager.rs    # Session scanning + message loading (4 providers)
+│       ├── commands.rs           # Tauri commands
+│       ├── session_manager/      # Session discovery per tool
+│       │   ├── mod.rs            # Shared types, dispatch, delete/trash policy
+│       │   ├── provider.rs       # SessionProvider trait + registry
+│       │   ├── utils.rs          # Shared path/text helpers
+│       │   └── {claude,codex,dsh,opencode}.rs
+│       ├── backup.rs             # Session dirs → zip backups (+ auto interval/retention)
+│       ├── trash.rs              # Restorable deletes (~/.trajectory-viewer/trash/)
+│       ├── export.rs             # Session → Markdown / JSONL
 │       └── trajectory/
-│           ├── mod.rs            # Data model (TrajectoryData, TrajectoryEvent, ContentBlock)
-│           │                     # + provider detection (claude/codex/dsh) + parse dispatch
-│           ├── utils.rs          # Shared: timestamp parsing, timing estimation, file head/tail reading
+│           ├── mod.rs            # Data model + provider detection + parse dispatch
+│           ├── utils.rs          # Timestamps, timing, head/tail reads, ParseWarnings
 │           └── parser/
 │               ├── mod.rs        # Parser module declarations
-│               ├── claude.rs     # Claude Code JSONL parser (5 tests)
-│               ├── codex.rs      # Codex JSONL parser (4 tests)
-│               ├── dsh.rs        # DSH zstd-compressed JSONL parser (3 tests)
-│               └── opencode.rs   # OpenCode JSON files + SQLite parser (5 tests)
+│               ├── claude.rs     # AI Code JSONL parser
+│               ├── codex.rs      # Codex JSONL parser
+│               ├── dsh.rs        # DSH zstd-compressed JSONL parser
+│               └── opencode.rs   # OpenCode JSON files + SQLite parser
 │
 ├── src/                          # Frontend (React + TypeScript + Tailwind)
 │   ├── main.tsx                  # React entry point
-│   ├── App.tsx                   # Root: session browser ↔ standalone file view
-│   ├── api.ts                    # Tauri invoke wrapper (4 API calls)
-│   ├── types.ts                  # TrajectoryData, SessionMeta, SessionMessage interfaces
+│   ├── App.tsx                   # Root: browser ↔ settings ↔ standalone file view
+│   ├── api.ts                    # Tauri invoke wrapper
+│   ├── types.ts                  # Shared interfaces
 │   ├── styles.css                # Tailwind base + CSS variables (light/dark)
 │   ├── lib/utils.ts              # cn() classname merge utility
 │   ├── utils/
 │   │   ├── layout.ts             # deriveTrajectoryLayout() — event→turn-grouped layout
-│   │   └── format.ts             # Time/token formatting utilities
+│   │   ├── format.ts             # Time/token formatting utilities
+│   │   └── {layout,format}.test.ts  # Vitest unit tests
 │   └── components/
 │       ├── SessionBrowser.tsx     # Main view: sidebar + messages/trajectory tabs
+│       ├── SettingsView.tsx       # Settings (General / Advanced tabs)
+│       ├── BackupSection.tsx      # Backup & restore panel (Advanced tab)
+│       ├── TrashSection.tsx       # Trash list with restore / purge
 │       ├── TrajectoryView.tsx     # Orchestrator: toolbar + timeline + table
+│       ├── TrajectoryErrorBoundary.tsx  # Shows render crashes on-page
 │       ├── TrajectoryToolbar.tsx  # Search, collapse toggles, duration switch
 │       ├── TrajectoryTimeline.tsx # 3-lane Chrome-Network-style timeline
 │       ├── TrajectoryTable.tsx    # Virtual-scrolled event table + detail panel
 │       ├── TrajectoryCell.tsx     # Single row renderer (7 kinds with icons)
-│       ├── TrajectoryDetail.tsx   # Detail panel (5 tabs: Summary/Payload/Result/Timing/Usage)
+│       ├── TrajectoryDetail.tsx   # Detail panel (Summary/Payload/Result/Timing/Usage)
 │       └── FileDropZone.tsx       # File picker landing page
 ```
 
@@ -91,11 +102,37 @@ trajectory-viewer/
 - **Turn/step derivation**: Events with missing turn/step get derived values (user-message starts new turn, tool-call → step 1)
 - **Timing estimation**: Duration estimated from next-event timestamp delta; TTFT ≈ duration/3 (capped at 3s) when not native
 
-### Adding a New Provider Parser
+### Adding a New Provider
 
-1. Create `src-tauri/src/trajectory/parser/{name}.rs` with `parse_trajectory(path) -> Result<(String, Vec<TrajectoryEvent>), String>`
-2. Add `pub mod {name};` to `src-tauri/src/trajectory/parser/mod.rs`
-3. Add detection to `detect_provider()` in `src-tauri/src/trajectory/mod.rs`
-4. Add route in `parse_trajectory()` in `src-tauri/src/trajectory/mod.rs`
-5. Add session scanning + message loading in `src-tauri/src/session_manager.rs`
-6. Add provider icon + filter button in `src/components/SessionBrowser.tsx`
+A provider is a `SessionProvider` impl; the registry drives everything else
+(scanning, messages, trash, and the UI's tool list).
+
+1. Create `src-tauri/src/session_manager/{name}.rs` implementing
+   `SessionProvider` (see `claude.rs` for a file-backed example, `opencode.rs`
+   for one that delegates). Key methods: `id`, `sessions_dir`, `parse_session`,
+   `load_messages`, `trash_session`, `trash_sessions_in_dir`.
+   - Override `owns_source` if sessions aren't referenced by path (e.g.
+     OpenCode's `sqlite:<db>:<id>`).
+   - Override `file_extensions`/`scan` if storage isn't a plain file tree.
+2. Register it in `provider::providers()` (`session_manager/provider.rs`).
+3. Add a `mod {name};` line in `session_manager/mod.rs`.
+
+For the trajectory (timeline/table) view, also add a parser:
+
+4. Create `src-tauri/src/trajectory/parser/{name}.rs` with
+   `parse_trajectory(path) -> Result<(String, Vec<TrajectoryEvent>), String>`
+5. Add `pub mod {name};` to `trajectory/parser/mod.rs`
+6. Add detection to `detect_provider()` and a route in `parse_trajectory()`
+   (`trajectory/mod.rs`)
+
+Finally, add the provider to the frontend lists: `PROVIDER_OPTIONS` in
+`src/components/SettingsView.tsx`, `PROVIDER_CHIPS` in
+`src/components/SessionBrowser.tsx`, and `AVAILABLE_PROVIDERS` in `src/App.tsx`.
+
+### Testing
+
+Rust: `cargo test` (unit + integration; `cargo test -- --ignored` runs the
+real-data smoke tests). CI also enforces `cargo fmt --check` and
+`cargo clippy --all-targets -- -D warnings`.
+
+Frontend: `pnpm test` (Vitest, pure logic in `src/utils/`), `npx tsc --noEmit`.

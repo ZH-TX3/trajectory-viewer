@@ -894,3 +894,134 @@ pub fn delete_sessions_in_dir(dir: &str) -> Result<usize, String> {
     remove_empty_dirs(path);
     Ok(deleted)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        crate::trajectory::parser::opencode::opencode_env_lock()
+    }
+
+    fn with_home(home: &Path, f: impl FnOnce()) {
+        let _guard = env_lock().lock().unwrap();
+        std::fs::create_dir_all(home).unwrap();
+        let original = std::env::var_os("HOME");
+        #[allow(deprecated)]
+        std::env::set_var("HOME", home);
+        f();
+        match original {
+            Some(value) => {
+                #[allow(deprecated)]
+                std::env::set_var("HOME", value);
+            }
+            None => {
+                #[allow(deprecated)]
+                std::env::remove_var("HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn provider_of_path_attributes_each_tool() {
+        assert_eq!(
+            provider_of_path(Path::new("/home/u/.claude/projects/p/s.jsonl")),
+            "claude"
+        );
+        assert_eq!(
+            provider_of_path(Path::new("/home/u/.codex/sessions/2026/01/01/r.jsonl")),
+            "codex"
+        );
+        assert_eq!(
+            provider_of_path(Path::new("/home/u/.dsh/sessions/p/s/session.jsonl.zstd")),
+            "dsh"
+        );
+        assert_eq!(
+            provider_of_path(Path::new("/home/u/.local/share/opencode/storage/x.json")),
+            "opencode"
+        );
+        assert_eq!(
+            provider_of_path(Path::new("/tmp/elsewhere.jsonl")),
+            "unknown"
+        );
+    }
+
+    // The delete the UI triggers must move the file into the trash, and the
+    // matching restore must bring it back byte-for-byte.
+    #[test]
+    fn delete_session_file_moves_to_trash_and_restores() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        with_home(&home, || {
+            let session = home.join(".claude/projects/proj/sess-1.jsonl");
+            std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+            std::fs::write(&session, b"{\"sessionId\":\"sess-1\"}\n").unwrap();
+
+            let trash_id = delete_session_file(&session.to_string_lossy()).unwrap();
+            assert!(!session.exists(), "session moved out");
+            assert_eq!(crate::trash::list_trash().len(), 1);
+
+            let manifest = crate::trash::restore_entry(&trash_id).unwrap();
+            assert_eq!(manifest.provider_id, "claude");
+            assert_eq!(manifest.session_id, "sess-1");
+            assert!(session.exists(), "session restored");
+            assert_eq!(
+                std::fs::read(&session).unwrap(),
+                b"{\"sessionId\":\"sess-1\"}\n"
+            );
+        });
+    }
+
+    // A DSH session is a directory; trashing must take the whole thing so the
+    // restore is complete rather than leaving an orphaned zstd file.
+    #[test]
+    fn delete_dsh_session_trashes_its_directory() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        with_home(&home, || {
+            let session_dir = home.join(".dsh/sessions/proj/ses-9");
+            std::fs::create_dir_all(&session_dir).unwrap();
+            let zstd = session_dir.join("session.jsonl.zstd");
+            std::fs::write(&zstd, b"compressed").unwrap();
+
+            delete_session_file(&zstd.to_string_lossy()).unwrap();
+            assert!(!session_dir.exists(), "whole session dir moved");
+
+            let entry = crate::trash::list_trash().into_iter().next().unwrap();
+            crate::trash::restore_entry(&entry.id).unwrap();
+            assert!(zstd.exists(), "zstd file restored inside its dir");
+        });
+    }
+
+    #[test]
+    fn delete_refuses_paths_outside_managed_dirs() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        with_home(&home, || {
+            let outsider = home.join("somewhere-else/sess.jsonl");
+            std::fs::create_dir_all(outsider.parent().unwrap()).unwrap();
+            std::fs::write(&outsider, b"{}\n").unwrap();
+
+            let err = delete_session_file(&outsider.to_string_lossy()).unwrap_err();
+            assert!(err.contains("outside managed"), "got: {err}");
+            assert!(outsider.exists(), "untouched");
+        });
+    }
+
+    #[test]
+    fn delete_refuses_non_session_extensions() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        with_home(&home, || {
+            let txt = home.join(".claude/projects/proj/notes.txt");
+            std::fs::create_dir_all(txt.parent().unwrap()).unwrap();
+            std::fs::write(&txt, b"x").unwrap();
+
+            let err = delete_session_file(&txt.to_string_lossy()).unwrap_err();
+            assert!(err.contains("non-session"), "got: {err}");
+            assert!(txt.exists());
+        });
+    }
+}

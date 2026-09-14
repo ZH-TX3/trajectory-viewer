@@ -2,6 +2,7 @@
 
 mod backup;
 mod commands;
+mod config_hub;
 mod export;
 mod session_manager;
 mod trajectory;
@@ -34,6 +35,17 @@ pub fn run() {
             commands::restore_trash_entry,
             commands::delete_trash_entry,
             commands::empty_trash,
+            config_hub::config_hub_snapshot,
+            config_hub::config_hub_toggle,
+            config_hub::config_hub_import_preview,
+            config_hub::config_hub_import,
+            config_hub::config_hub_undo_import,
+            config_hub::config_hub_delete,
+            config_hub::config_hub_mcp_list,
+            config_hub::config_hub_mcp_upsert,
+            config_hub::config_hub_mcp_toggle,
+            config_hub::config_hub_mcp_delete,
+            config_hub::config_hub_mcp_import,
         ])
         .setup(|_app| {
             // Background auto-backup: run a pass on startup, then every 5 min.

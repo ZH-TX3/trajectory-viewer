@@ -152,13 +152,13 @@ export function SettingsView({
       <header className="h-10 border-b border-border/40 flex items-center gap-2 px-3 shrink-0 bg-white dark:bg-gray-900">
         <button
           onClick={onBack}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          title="Back"
+          aria-label="Back"
+          className="flex items-center justify-center size-7 shrink-0 rounded-md border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
         >
-          <ArrowLeft className="size-3.5" />
-          Back
+          <ArrowLeft className="size-4" />
         </button>
-        <Settings className="size-4 text-muted-foreground" />
-        <span className="text-sm">Settings</span>
+        <h1 className="ml-2 text-base font-semibold leading-none">Settings</h1>
       </header>
 
       {/* Tab row — below the header, full width */}

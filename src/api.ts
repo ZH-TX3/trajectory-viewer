@@ -12,6 +12,10 @@ import type {
   BackupSettings,
   TrashEntry,
   TrashManifest,
+  HubSnapshot,
+  ImportPreview,
+  McpServer,
+  McpServerSpec,
 } from './types';
 
 export const api = {
@@ -130,5 +134,75 @@ export const api = {
   /** Permanently delete every trash entry. */
   async emptyTrash(): Promise<number> {
     return await invoke('empty_trash');
+  },
+
+  // ── Config Hub ─────────────────────────────────────────────────────────
+
+  /** Tools, resources and read-only config files, in one call. */
+  async configHubSnapshot(): Promise<HubSnapshot> {
+    return await invoke('config_hub_snapshot');
+  },
+
+  /** Enable or disable a resource for one tool. */
+  async configHubToggle(
+    id: string,
+    toolId: string,
+    enabled: boolean,
+    method?: 'auto' | 'symlink' | 'copy',
+  ): Promise<void> {
+    return await invoke('config_hub_toggle', { id, toolId, enabled, method });
+  },
+
+  /** Describe what importing a drifted copy would do. */
+  async configHubImportPreview(id: string, toolId: string): Promise<ImportPreview> {
+    return await invoke('config_hub_import_preview', { id, toolId });
+  },
+
+  /** Move a tool's copy into the unified store and link it back. */
+  async configHubImport(id: string, toolId: string, overwrite: boolean): Promise<void> {
+    return await invoke('config_hub_import', { id, toolId, overwrite });
+  },
+
+  /** Undo an import, moving the copy back to the tool. */
+  async configHubUndoImport(id: string, toolId: string): Promise<void> {
+    return await invoke('config_hub_undo_import', { id, toolId });
+  },
+
+  /** Delete a resource (unlink every tool, then trash the entry). */
+  async configHubDelete(id: string): Promise<string> {
+    return await invoke('config_hub_delete', { id });
+  },
+
+  // ── Config Hub: MCP ────────────────────────────────────────────────────
+
+  /** List every MCP server in the unified store. */
+  async configHubMcpList(): Promise<McpServer[]> {
+    return await invoke('config_hub_mcp_list');
+  },
+
+  /** Create or update one MCP server and reconcile the tool configs. */
+  async configHubMcpUpsert(
+    id: string,
+    name: string,
+    description: string | null,
+    server: McpServerSpec,
+    apps: Record<string, boolean>,
+  ): Promise<void> {
+    return await invoke('config_hub_mcp_upsert', { id, name, description, server, apps });
+  },
+
+  /** Enable or disable an MCP server for one tool. */
+  async configHubMcpToggle(id: string, toolId: string, enabled: boolean): Promise<void> {
+    return await invoke('config_hub_mcp_toggle', { id, toolId, enabled });
+  },
+
+  /** Delete an MCP server (store + every tool that had it enabled). */
+  async configHubMcpDelete(id: string): Promise<void> {
+    return await invoke('config_hub_mcp_delete', { id });
+  },
+
+  /** Import live MCP configs from all installed tools; returns the count. */
+  async configHubMcpImport(): Promise<number> {
+    return await invoke('config_hub_mcp_import');
   },
 };

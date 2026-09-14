@@ -48,6 +48,16 @@ trajectory-viewer/
 │       ├── backup.rs             # Session dirs → zip backups (+ auto interval/retention)
 │       ├── trash.rs              # Restorable deletes (~/.trajectory-viewer/trash/)
 │       ├── export.rs             # Session → Markdown / JSONL
+│       ├── config_hub/           # Unified config management (skills/agents/prompts/MCP)
+│       │   ├── mod.rs            # Hub snapshot + Tauri commands + id parsing
+│       │   ├── registry.rs       # ToolProvider trait + registry
+│       │   ├── resource.rs       # Resource model + AppState
+│       │   ├── scan.rs           # SSOT + tool dirs → merged Resource list
+│       │   ├── sync.rs           # Link/copy engine (SyncMethod::Auto fallback)
+│       │   ├── migrate.rs        # Import / undo / delete (into trash)
+│       │   ├── state.rs          # Copy markers (~/.trajectory-viewer/config-hub.json)
+│       │   ├── utils.rs          # SSOT paths, entry listing, descriptions
+│       │   └── {claude,codex,dsh,opencode}.rs
 │       └── trajectory/
 │           ├── mod.rs            # Data model + provider detection + parse dispatch
 │           ├── utils.rs          # Timestamps, timing, head/tail reads, ParseWarnings
@@ -60,7 +70,7 @@ trajectory-viewer/
 │
 ├── src/                          # Frontend (React + TypeScript + Tailwind)
 │   ├── main.tsx                  # React entry point
-│   ├── App.tsx                   # Root: browser ↔ settings ↔ standalone file view
+│   ├── App.tsx                   # Root: sessions ↔ config hub ↔ settings ↔ file view
 │   ├── api.ts                    # Tauri invoke wrapper
 │   ├── types.ts                  # Shared interfaces
 │   ├── styles.css                # Tailwind base + CSS variables (light/dark)
@@ -68,9 +78,17 @@ trajectory-viewer/
 │   ├── utils/
 │   │   ├── layout.ts             # deriveTrajectoryLayout() — event→turn-grouped layout
 │   │   ├── format.ts             # Time/token formatting utilities
-│   │   └── {layout,format}.test.ts  # Vitest unit tests
+│   │   ├── configHub.ts          # Resource filtering + state labels
+│   │   └── {layout,format,configHub}.test.ts  # Vitest unit tests
 │   └── components/
 │       ├── SessionBrowser.tsx     # Main view: sidebar + messages/trajectory tabs
+│       ├── config-hub/            # Config Hub view
+│       │   ├── ConfigHubView.tsx      # Orchestrator: filters + list + read-only config
+│       │   ├── ResourceList.tsx       # Resource rows with per-tool switches
+│       │   ├── AppToggleGroup.tsx     # Per-tool link/copy switches
+│       │   ├── ImportPreviewDialog.tsx  # Import preview + conflict choice
+│       │   ├── DeleteConfirmDialog.tsx  # Delete → trash confirmation
+│       │   └── ConfigReadonlyPanel.tsx  # Read-only prompts/config files
 │       ├── SettingsView.tsx       # Settings (General / Advanced tabs)
 │       ├── BackupSection.tsx      # Backup & restore panel (Advanced tab)
 │       ├── TrashSection.tsx       # Trash list with restore / purge
@@ -101,6 +119,32 @@ trajectory-viewer/
 - **Provider detection**: `detect_provider()` reads first 200 lines (or decompresses zstd header) to identify format
 - **Turn/step derivation**: Events with missing turn/step get derived values (user-message starts new turn, tool-call → step 1)
 - **Timing estimation**: Duration estimated from next-event timestamp delta; TTFT ≈ duration/3 (capped at 3s) when not native
+
+### Config Hub
+
+A second top-level view (top-bar switch, next to Settings) that unifies each
+AI CLI's configuration. The principle: **what can be shared lives once in
+`~/.agents/` and is linked out; what can't falls back to per-tool handling.**
+
+| Resource | Strategy | Delivery |
+|----------|----------|----------|
+| Skills | Linked | `~/.agents/skills/<name>` → `<tool>/skills/<name>` |
+| Agents | Linked (Claude only) | `~/.agents/agents/<name>.md` → `<tool>/agents/<name>.md` |
+| Prompts | Read-only (this stage) | `CLAUDE.md` / `AGENTS.md` |
+| MCP / configs | Read-only (this stage) | JSON / TOML / YAML, shown per tool |
+
+Per-tool state (`AppState`): `Linked` (symlink into the SSOT), `Copied` (a
+copy this app made, tracked in `~/.trajectory-viewer/config-hub.json`),
+`Drifted` (present but unmanaged — a real copy, or a link pointing elsewhere),
+`Absent`.
+
+`SyncMethod::Auto` (the default) prefers a symlink and silently falls back to
+a directory copy when linking fails — Windows without developer mode, or a
+cross-volume target. No junctions. Deletes reuse `trash.rs`, so a resource is
+always recoverable.
+
+Adding a tool: implement `ToolProvider` in `config_hub/<name>.rs`, register it
+in `registry::providers()`, and add a `mod` line in `config_hub/mod.rs`.
 
 ### Adding a New Provider
 

@@ -18,6 +18,8 @@ src-tauri/target/
 *.swp
 *.swo
 *~
+.claude/
+openspec/
 
 # OS
 .DS_Store

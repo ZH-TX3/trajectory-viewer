@@ -134,3 +134,103 @@ export interface TrashManifest {
   kind: string;
   items: Array<{ originalPath: string; storedName: string }>;
 }
+
+// ── Config Hub Types ─────────────────────────────────────────────────────
+
+export type ResourceKind = 'skill' | 'agent' | 'prompt' | 'mcp' | 'config';
+
+/** How one tool relates to a resource. */
+export type AppState = 'linked' | 'copied' | 'drifted' | 'absent';
+
+export interface ConfigResource {
+  id: string;
+  kind: ResourceKind;
+  name: string;
+  description?: string | null;
+  ssotPath?: string | null;
+  inSsot: boolean;
+  /** Per-tool state, keyed by tool id. */
+  apps: Record<string, AppState>;
+}
+
+export interface ToolInfo {
+  id: string;
+  displayName: string;
+  installed: boolean;
+  /** Resource kinds this tool can link (e.g. `["skill", "agent"]`). */
+  linkableKinds: ResourceKind[];
+  hasPrompt: boolean;
+  hasMcp: boolean;
+}
+
+export type ConfigFormat = 'json' | 'toml' | 'yaml' | 'markdown';
+
+export interface ConfigFileContent {
+  label: string;
+  path: string;
+  format: ConfigFormat;
+  exists: boolean;
+  content?: string | null;
+}
+
+export interface ToolConfigs {
+  toolId: string;
+  displayName: string;
+  installed: boolean;
+  prompt?: ConfigFileContent | null;
+  files: ConfigFileContent[];
+}
+
+export interface HubSnapshot {
+  tools: ToolInfo[];
+  resources: ConfigResource[];
+  configs: ToolConfigs[];
+}
+
+export interface ImportPreview {
+  kind: ResourceKind;
+  name: string;
+  toolId: string;
+  sourcePath: string;
+  targetPath: string;
+  conflict: boolean;
+  action: string;
+}
+
+// ── Config Hub: MCP Types ────────────────────────────────────────────────
+
+export type McpServerType = 'stdio' | 'http' | 'sse';
+
+/** Canonical MCP server spec (the unified store format). */
+export interface McpServerSpec {
+  type?: McpServerType;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  description?: string | null;
+  server: McpServerSpec;
+  /** Per-tool enablement (`claude` / `codex` / `opencode`). */
+  apps: Record<string, boolean>;
+}
+
+export interface McpEditorState {
+  id: string;
+  name: string;
+  description: string;
+  type: McpServerType;
+  command: string;
+  args: string;
+  env: string;
+  url: string;
+  headers: string;
+  apps: Record<string, boolean>;
+}

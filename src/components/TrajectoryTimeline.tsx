@@ -65,11 +65,20 @@ function rangeFraction(
 }
 
 function LaneLabels() {
+  // Lane rows live at `top: lane * 17 + 1` with 8px bars, so a lane's center
+  // is `lane * 17 + 5`. Anchor each label to that exact center so the text
+  // lines up with the bars to its right (they share the same 17px pitch).
   return (
     <div className="w-11 shrink-0 border-r border-border/40 relative text-[9px] text-muted-foreground leading-none">
-      <span className="absolute right-1 top-[6px]">Input</span>
-      <span className="absolute right-1 top-[23px]">Model</span>
-      <span className="absolute right-1 top-[40px]">Tools</span>
+      {['Input', 'Model', 'Tools'].map((label, lane) => (
+        <span
+          key={label}
+          className="absolute right-1 -translate-y-1/2"
+          style={{ top: lane * 17 + 5 }}
+        >
+          {label}
+        </span>
+      ))}
     </div>
   );
 }

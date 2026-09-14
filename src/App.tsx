@@ -1,14 +1,16 @@
 // ── App Root ─────────────────────────────────────────────────────────────
 //
-// Two views: session browser (default) or standalone file trajectory view.
+// Three views: session browser (default), config hub, or a standalone file
+// trajectory view.
 
 import { useState, useCallback } from 'react';
 import { SessionBrowser } from './components/SessionBrowser';
 import { SettingsView } from './components/SettingsView';
 import { TrajectoryView } from './components/TrajectoryView';
+import { ConfigHubView } from './components/config-hub/ConfigHubView';
 import { api } from './api';
 import type { TrajectoryData } from './types';
-import { ArrowLeft, FileText, Settings } from 'lucide-react';
+import { ArrowLeft, Settings, SlidersHorizontal } from 'lucide-react';
 
 const AVAILABLE_PROVIDERS = ['claude', 'codex', 'dsh', 'opencode'] as const;
 const SETTINGS_KEY = 'trajectory-viewer.providers.enabled-v1';
@@ -55,7 +57,7 @@ function loadProviderOrder(): string[] {
 }
 
 export function App() {
-  const [mode, setMode] = useState<'browser' | 'settings' | 'file'>('browser');
+  const [mode, setMode] = useState<'browser' | 'hub' | 'settings' | 'file'>('browser');
   const [enabledProviders, setEnabledProviders] = useState<Set<string>>(loadEnabledProviders);
   const [providerOrder, setProviderOrder] = useState<string[]>(loadProviderOrder);
   const [trajectoryData, setTrajectoryData] = useState<TrajectoryData | null>(null);
@@ -116,33 +118,45 @@ export function App() {
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
       {/* Header bar */}
-      {/* Global header — hidden on the settings page, which has its own header */}
+      {/* Global header — hidden on the settings page, which has its own header.
+          The config hub and file views get a Back button to return to sessions. */}
       {mode !== 'settings' && (
         <header className="h-10 border-b border-border/40 flex items-center gap-2 px-3 shrink-0 bg-background/95 backdrop-blur-sm relative z-50">
-          {mode === 'file' && (
+          {(mode === 'file' || mode === 'hub') && (
             <button
               onClick={handleBack}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              title="Back"
+              aria-label="Back"
+              className="flex items-center justify-center size-7 shrink-0 rounded-md border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
             >
-              <ArrowLeft className="size-3.5" />
-              Back
+              <ArrowLeft className="size-4" />
             </button>
           )}
-          <div className="flex items-center gap-1.5 text-sm">
-            <FileText className="size-4" />
-            Trajectory Viewer
-          </div>
+          <h1 className="ml-2 text-base font-semibold leading-none">
+            {mode === 'hub' ? 'Config Hub' : 'Trajectory Viewer'}
+          </h1>
           {sourcePath && (
             <span className="text-[10px] text-muted-foreground truncate max-w-[300px] ml-2" title={sourcePath}>
               {sourcePath}
             </span>
           )}
 
-          <div className="ml-auto flex items-center gap-1 relative">
+          <div className="ml-auto flex items-center gap-1.5 relative">
+            {mode === 'browser' && (
+              <button
+                onClick={() => setMode('hub')}
+                title="Config Hub — manage skills, agents and tool configs"
+                aria-label="Config Hub"
+                className="flex items-center justify-center size-7 rounded-md border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+              >
+                <SlidersHorizontal className="size-4" />
+              </button>
+            )}
             <button
               onClick={() => setMode('settings')}
               title="Settings"
-              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+              aria-label="Settings"
+              className="flex items-center justify-center size-7 rounded-md border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
             >
               <Settings className="size-4" />
             </button>
@@ -166,6 +180,8 @@ export function App() {
             providerOrder={providerOrder}
           />
         </div>
+
+        {mode === 'hub' && <ConfigHubView />}
 
         {mode === 'settings' && (
           <SettingsView

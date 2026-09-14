@@ -1,13 +1,20 @@
 // ── Config Hub: MCP server editor modal ──────────────────────────────────
 //
-// Single form for adding or editing one MCP server in the unified store. The
-// fields switch with the transport type: stdio gets command/args/env,
-// http/sse get url/headers. Per-tool toggles decide where it gets written.
+// Two ways to edit one server, like cc-switch: structured fields up top
+// (transport type, command/args/env or url/headers) and the raw JSON spec
+// below. The fields drive the JSON; editing the JSON re-parses it into the
+// fields, so the two views stay in step. Per-tool toggles decide which tools'
+// live config the server gets merged into.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { McpEditorState, McpServerType } from '../../types';
-import { TOOL_ACTIVE_CLASSES } from '../../utils/configHub';
+import {
+  TOOL_ACTIVE_CLASSES,
+  editorToJson,
+  editorToMcp,
+  jsonToEditor,
+} from '../../utils/configHub';
 import { cn } from '../../lib/utils';
 import { ToolBadge } from '../icons/BrandIcons';
 
@@ -25,18 +32,61 @@ const TYPES: Array<{ value: McpServerType; label: string }> = [
 ];
 
 const MCP_TOOLS = ['claude', 'codex', 'opencode'];
+const TOOL_LABELS: Record<string, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+};
 
 export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModalProps) {
   const [draft, setDraft] = useState<McpEditorState>(editor);
+  const [json, setJson] = useState(() => editorToJson(editor));
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const isNew = !editor.id && !editor.name;
 
-  const edit = (patch: Partial<McpEditorState>) => setDraft((e) => ({ ...e, ...patch }));
+  const editFields = (patch: Partial<McpEditorState>) => {
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    // Fields are the source of truth; keep the JSON view in sync.
+    setJson(editorToJson(next));
+    setJsonError(null);
+  };
 
-  const canSave = isNew ? draft.name.trim().length > 0 : draft.id.trim().length > 0;
+  const onJsonChange = (text: string) => {
+    setJson(text);
+    const result = jsonToEditor(text, draft);
+    if ('error' in result) {
+      setJsonError(result.error);
+    } else {
+      setJsonError(null);
+      setDraft(result.editor);
+    }
+  };
+
+  // Re-indent the JSON view; parse first so invalid text reports instead of
+  // being silently reformatted.
+  const formatJson = () => {
+    const result = jsonToEditor(json, draft);
+    if ('error' in result) {
+      setJsonError(result.error);
+      return;
+    }
+    setJsonError(null);
+    setDraft(result.editor);
+    setJson(JSON.stringify(editorToMcp(result.editor), null, 2));
+  };
+
+  // Format the JSON view on open.
+  useEffect(() => {
+    setJson(editorToJson(editor));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const canSave = (isNew ? draft.name.trim().length > 0 : draft.id.trim().length > 0) && !jsonError;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4 shadow-lg overflow-y-auto max-h-[92vh]">
+      <div className="w-full max-w-2xl rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4 shadow-lg overflow-y-auto max-h-[92vh]">
         <div className="text-sm font-medium mb-3">
           {isNew ? 'Add MCP server' : `Edit MCP server ${draft.name || draft.id}`}
         </div>
@@ -48,9 +98,9 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
               <span className="text-[10px] text-muted-foreground">Name</span>
               <input
                 value={draft.name}
-                onChange={(e) => edit({ name: e.target.value })}
+                onChange={(e) => editFields({ name: e.target.value })}
                 placeholder={isNew ? 'server-id' : draft.id}
-                className="mt-0.5 w-full text-xs bg-transparent border border-border/60 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
+                className="mt-0.5 w-full text-xs bg-transparent border border-[hsl(var(--border))] rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
             </label>
             <label className="block">
@@ -59,10 +109,10 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
               </span>
               <input
                 value={draft.id}
-                onChange={(e) => edit({ id: e.target.value })}
+                onChange={(e) => editFields({ id: e.target.value })}
                 disabled={!isNew}
                 placeholder="unique-id"
-                className="mt-0.5 w-full text-xs bg-transparent border border-border/60 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                className="mt-0.5 w-full text-xs bg-transparent border border-[hsl(var(--border))] rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
               />
             </label>
           </div>
@@ -71,24 +121,24 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
             <span className="text-[10px] text-muted-foreground">Description (optional)</span>
             <input
               value={draft.description}
-              onChange={(e) => edit({ description: e.target.value })}
-              className="mt-0.5 w-full text-xs bg-transparent border border-border/60 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
+              onChange={(e) => editFields({ description: e.target.value })}
+              className="mt-0.5 w-full text-xs bg-transparent border border-[hsl(var(--border))] rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
           </label>
 
           {/* Transport type */}
           <div>
             <span className="text-[10px] text-muted-foreground">Transport</span>
-            <div className="mt-0.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-muted/30 p-0.5 w-fit">
+            <div className="mt-0.5 flex items-center gap-0.5 rounded-md border border-[hsl(var(--border))] bg-muted/30 p-0.5 w-fit">
               {TYPES.map((t) => (
                 <button
                   key={t.value}
-                  onClick={() => edit({ type: t.value })}
+                  onClick={() => editFields({ type: t.value })}
                   aria-pressed={draft.type === t.value}
                   className={cn(
                     'px-2.5 py-0.5 rounded text-[10px] transition-colors',
                     draft.type === t.value
-                      ? 'bg-background text-foreground font-medium shadow-sm ring-1 ring-border'
+                      ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200 font-medium shadow-sm ring-1 ring-blue-300 dark:ring-blue-700'
                       : 'text-muted-foreground hover:text-foreground',
                   )}
                 >
@@ -105,20 +155,20 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
                 <span className="text-[10px] text-muted-foreground">Command</span>
                 <input
                   value={draft.command}
-                  onChange={(e) => edit({ command: e.target.value })}
+                  onChange={(e) => editFields({ command: e.target.value })}
                   placeholder="npx"
-                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-border/60 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
+                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-[hsl(var(--border))] rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 />
               </label>
               <label className="block">
                 <span className="text-[10px] text-muted-foreground">
-                  Args (space-separated)
+                  Args (comma-separated)
                 </span>
                 <input
                   value={draft.args}
-                  onChange={(e) => edit({ args: e.target.value })}
-                  placeholder="-y @modelcontextprotocol/server-time"
-                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-border/60 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
+                  onChange={(e) => editFields({ args: e.target.value })}
+                  placeholder="-y, @modelcontextprotocol/server-time"
+                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-[hsl(var(--border))] rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 />
               </label>
               <label className="block">
@@ -127,9 +177,9 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
                 </span>
                 <textarea
                   value={draft.env}
-                  onChange={(e) => edit({ env: e.target.value })}
+                  onChange={(e) => editFields({ env: e.target.value })}
                   rows={2}
-                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-border/60 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring resize-y"
+                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-[hsl(var(--border))] rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
                 />
               </label>
             </>
@@ -142,9 +192,9 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
                 <span className="text-[10px] text-muted-foreground">URL</span>
                 <input
                   value={draft.url}
-                  onChange={(e) => edit({ url: e.target.value })}
+                  onChange={(e) => editFields({ url: e.target.value })}
                   placeholder="https://example.com/mcp"
-                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-border/60 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
+                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-[hsl(var(--border))] rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 />
               </label>
               <label className="block">
@@ -153,13 +203,43 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
                 </span>
                 <textarea
                   value={draft.headers}
-                  onChange={(e) => edit({ headers: e.target.value })}
+                  onChange={(e) => editFields({ headers: e.target.value })}
                   rows={2}
-                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-border/60 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring resize-y"
+                  className="mt-0.5 w-full text-xs font-mono bg-transparent border border-[hsl(var(--border))] rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
                 />
               </label>
             </>
           )}
+
+          {/* Raw JSON view — same data, editable both ways */}
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground">
+                JSON (editing this updates the fields above)
+              </span>
+              <button
+                onClick={formatJson}
+                className="ml-auto text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                format
+              </button>
+            </div>
+            <textarea
+              value={json}
+              onChange={(e) => onJsonChange(e.target.value)}
+              spellCheck={false}
+              rows={8}
+              className={cn(
+                'mt-0.5 w-full text-[11px] leading-relaxed font-mono bg-transparent border rounded p-2 resize-y focus:outline-none focus:ring-1 focus:ring-blue-400',
+                jsonError ? 'border-red-500/60' : 'border-[hsl(var(--border))]',
+              )}
+            />
+            {jsonError && (
+              <div className="mt-1 px-2 py-1 rounded text-[10px] bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 break-all">
+                {jsonError}
+              </div>
+            )}
+          </div>
 
           {/* per-tool toggles */}
           <div>
@@ -170,7 +250,7 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
                 return (
                   <button
                     key={toolId}
-                    onClick={() => edit({ apps: { ...draft.apps, [toolId]: !enabled } })}
+                    onClick={() => editFields({ apps: { ...draft.apps, [toolId]: !enabled } })}
                     aria-pressed={enabled}
                     className={cn(
                       'h-7 px-2 rounded-lg flex items-center justify-center transition-all',
@@ -179,7 +259,7 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
                         : 'opacity-40 hover:opacity-80',
                     )}
                   >
-                    <ToolBadge toolId={toolId} label={toolLabel(toolId)} className="size-3.5" />
+                    <ToolBadge toolId={toolId} label={TOOL_LABELS[toolId]} className="size-3.5" />
                   </button>
                 );
               })}
@@ -191,7 +271,7 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
           <button
             onClick={onCancel}
             disabled={busy}
-            className="px-3 py-1 rounded text-xs border border-border/40 hover:bg-muted/40 transition-colors disabled:opacity-50"
+            className="px-3 py-1 rounded text-xs border border-[hsl(var(--border))] hover:bg-muted/40 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
@@ -209,12 +289,5 @@ export function McpEditorModal({ editor, busy, onSave, onCancel }: McpEditorModa
   );
 }
 
-function toolLabel(toolId: string): string {
-  return toolId === 'claude'
-    ? 'Claude Code'
-    : toolId === 'codex'
-      ? 'Codex'
-      : toolId === 'opencode'
-        ? 'OpenCode'
-        : toolId;
-}
+/** Re-exported for callers that only need the canonical spec. */
+export { editorToMcp };

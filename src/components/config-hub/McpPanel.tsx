@@ -5,10 +5,14 @@
 // toggling writes into each enabled tool's live config.
 
 import { useCallback, useEffect, useState } from 'react';
-import { Download, Loader2, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Download, Loader2, Pencil, Plus, RefreshCw, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { api } from '../../api';
 import type { McpEditorState, McpServer } from '../../types';
-import { TOOL_ACTIVE_CLASSES, editorToMcp, entriesToString } from '../../utils/configHub';
+import {
+  TOOL_ACTIVE_CLASSES,
+  editorToMcp,
+  mcpToEditor,
+} from '../../utils/configHub';
 import { cn } from '../../lib/utils';
 import { McpEditorModal } from './McpEditorModal';
 import { ToolBadge } from '../icons/BrandIcons';
@@ -32,6 +36,16 @@ export function McpPanel() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [editor, setEditor] = useState<McpEditorState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<McpServer | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggleExpanded = useCallback((id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -64,36 +78,18 @@ export function McpPanel() {
   );
 
   const openAdd = useCallback(() => {
-    setEditor({
-      id: '',
-      name: '',
-      description: '',
-      type: 'stdio',
-      command: 'npx',
-      args: '',
-      env: '',
-      url: '',
-      headers: '',
-      apps: { claude: false, codex: false, opencode: false },
-    });
+    setEditor(
+      mcpToEditor({
+        id: '',
+        name: '',
+        server: { type: 'stdio', command: 'npx', args: ['-y', ''] },
+        apps: { claude: false, codex: false, opencode: false },
+      }),
+    );
   }, []);
 
   const openEdit = useCallback((server: McpServer) => {
-    setEditor({
-      id: server.id,
-      name: server.name,
-      description: server.description ?? '',
-      type: server.server.type ?? 'stdio',
-      command: (server.server.command as string) ?? '',
-      args: ((server.server.args as string[]) ?? []).join(' '),
-      env: entriesToString(server.server.env as Record<string, string>),
-      url: (server.server.url as string) ?? '',
-      headers: entriesToString(server.server.headers as Record<string, string>),
-      apps: MCP_TOOLS.reduce<Record<string, boolean>>(
-        (acc, t) => ((acc[t] = server.apps[t] ?? false), acc),
-        {},
-      ),
-    });
+    setEditor(mcpToEditor(server));
   }, []);
 
   const handleSave = useCallback(
@@ -221,76 +217,96 @@ export function McpPanel() {
         ) : (
           servers.map((server) => {
             const enabledCount = MCP_TOOLS.filter((t) => server.apps[t]).length;
+            const isOpen = expanded.has(server.id);
             return (
-              <div key={server.id} className="px-4 py-2 flex items-center gap-3">
-                <span className="text-[9px] uppercase tracking-wide rounded px-1 py-0.5 border shrink-0 border-sky-500/40 text-sky-600 dark:text-sky-400">
-                  MCP
-                </span>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium truncate">
-                      {server.name || server.id}
-                    </span>
-                    {enabledCount > 0 ? (
-                      <span className="text-[9px] text-muted-foreground border border-border/40 rounded px-1">
-                        {enabledCount}/{MCP_TOOLS.length} tools
-                      </span>
+              <div key={server.id}>
+                <div className="px-4 py-2 flex items-center gap-2">
+                  <button
+                    onClick={() => toggleExpanded(server.id)}
+                    title={isOpen ? 'Hide JSON' : 'Show JSON'}
+                    className="p-0.5 rounded text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    {isOpen ? (
+                      <ChevronDown className="size-3" />
                     ) : (
-                      <span className="text-[9px] text-muted-foreground border border-border/40 rounded px-1">
-                        not enabled
-                      </span>
+                      <ChevronRight className="size-3" />
                     )}
-                    <span className="text-[9px] uppercase tracking-wide text-muted-foreground/70 border border-border/40 rounded px-1">
-                      {server.server.type ?? 'stdio'}
-                    </span>
+                  </button>
+                  <span className="text-[9px] uppercase tracking-wide rounded px-1 py-0.5 border shrink-0 border-sky-500/40 text-sky-600 dark:text-sky-400">
+                    MCP
+                  </span>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-medium truncate">
+                        {server.name || server.id}
+                      </span>
+                      {enabledCount > 0 ? (
+                        <span className="text-[9px] text-muted-foreground border border-border/40 rounded px-1">
+                          {enabledCount}/{MCP_TOOLS.length} tools
+                        </span>
+                      ) : (
+                        <span className="text-[9px] text-muted-foreground border border-border/40 rounded px-1">
+                          not enabled
+                        </span>
+                      )}
+                      <span className="text-[9px] uppercase tracking-wide text-muted-foreground/70 border border-border/40 rounded px-1">
+                        {server.server.type ?? 'stdio'}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground font-mono truncate">
+                      {describeSpec(server)}
+                    </div>
                   </div>
-                  <div className="text-[10px] text-muted-foreground font-mono truncate">
-                    {describeSpec(server)}
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    {MCP_TOOLS.map((toolId) => {
+                      const enabled = server.apps[toolId] ?? false;
+                      const busy = busyKey === `${server.id}@${toolId}`;
+                      return (
+                        <button
+                          key={toolId}
+                          onClick={() => handleToggle(server.id, toolId, !enabled)}
+                          disabled={busy || busyKey !== null}
+                          aria-pressed={enabled}
+                          title={`${TOOL_LABELS[toolId]}: ${enabled ? 'enabled' : 'disabled'}`}
+                          className={cn(
+                            'w-7 h-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-50 shrink-0',
+                            enabled
+                              ? TOOL_ACTIVE_CLASSES[toolId] ?? 'bg-muted/40 text-foreground'
+                              : 'opacity-40 hover:opacity-80',
+                          )}
+                        >
+                          {busy ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <ToolBadge toolId={toolId} className="size-3.5" />
+                          )}
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick={() => openEdit(server)}
+                      title="Edit"
+                      className="ml-1 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                    >
+                      <Pencil className="size-3" />
+                    </button>
+                    <button
+                      onClick={() => setPendingDelete(server)}
+                      title="Delete"
+                      className="p-1 rounded text-red-500 hover:bg-red-500/10 transition-colors"
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1 shrink-0">
-                  {MCP_TOOLS.map((toolId) => {
-                    const enabled = server.apps[toolId] ?? false;
-                    const busy = busyKey === `${server.id}@${toolId}`;
-                    return (
-                      <button
-                        key={toolId}
-                        onClick={() => handleToggle(server.id, toolId, !enabled)}
-                        disabled={busy || busyKey !== null}
-                        aria-pressed={enabled}
-                        title={`${TOOL_LABELS[toolId]}: ${enabled ? 'enabled' : 'disabled'}`}
-                        className={cn(
-                          'w-7 h-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-50 shrink-0',
-                          enabled
-                            ? TOOL_ACTIVE_CLASSES[toolId] ?? 'bg-muted/40 text-foreground'
-                            : 'opacity-40 hover:opacity-80',
-                        )}
-                      >
-                        {busy ? (
-                          <Loader2 className="size-3.5 animate-spin" />
-                        ) : (
-                          <ToolBadge toolId={toolId} className="size-3.5" />
-                        )}
-                      </button>
-                    );
-                  })}
-                  <button
-                    onClick={() => openEdit(server)}
-                    title="Edit"
-                    className="ml-1 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-                  >
-                    <Pencil className="size-3" />
-                  </button>
-                  <button
-                    onClick={() => setPendingDelete(server)}
-                    title="Delete"
-                    className="p-1 rounded text-red-500 hover:bg-red-500/10 transition-colors"
-                  >
-                    <Trash2 className="size-3" />
-                  </button>
-                </div>
+                {isOpen && (
+                  <pre className="mx-4 mb-2 text-[10px] leading-relaxed font-mono whitespace-pre-wrap break-all rounded bg-muted/30 p-2 max-h-64 overflow-auto">
+                    {JSON.stringify(server.server, null, 2)}
+                  </pre>
+                )}
               </div>
             );
           })

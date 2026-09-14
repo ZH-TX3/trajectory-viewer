@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { ConfigResource, ToolInfo } from '../types';
+import type { ConfigResource, McpEditorState, ToolInfo } from '../types';
 import {
+  editorToJson,
   editorToMcp,
   entriesToString,
   filterResources,
   hasDrift,
+  jsonToEditor,
   linkableTools,
   mcpToEditor,
   presentKinds,
@@ -127,7 +129,7 @@ describe('MCP editor conversions', () => {
       description: '',
       type: 'stdio',
       command: 'npx',
-      args: '-y @modelcontextprotocol/server-time',
+      args: '-y, @modelcontextprotocol/server-time',
       env: 'API_KEY=sk-123',
       url: '',
       headers: '',
@@ -171,13 +173,29 @@ describe('MCP editor conversions', () => {
       apps: { claude: true },
     });
     expect(editor.description).toBe('Temporal server');
-    expect(editor.args).toBe('-y pkg');
+    expect(editor.args).toBe('-y, pkg');
     expect(editor.env).toBe('A=1');
 
-    // Back to a spec via the editor.
+    // Back to a spec via the fields.
     const spec = editorToMcp(editor);
     expect(spec.args).toEqual(['-y', 'pkg']);
     expect(spec.env).toEqual({ A: '1' });
+  });
+
+  it('comma-separated args keep a space inside one argument', () => {
+    const spec = editorToMcp({
+      id: 'x',
+      name: 'x',
+      description: '',
+      type: 'stdio',
+      command: 'my-tool',
+      args: '--dir, C:/My Files/data, --verbose',
+      env: '',
+      url: '',
+      headers: '',
+      apps: {},
+    });
+    expect(spec.args).toEqual(['--dir', 'C:/My Files/data', '--verbose']);
   });
 
   it('stringToEntries handles blank lines and missing equals', () => {
@@ -188,5 +206,79 @@ describe('MCP editor conversions', () => {
   it('entriesToString is the inverse of stringToEntries', () => {
     const entries = { A: '1', B: 'two words' };
     expect(stringToEntries(entriesToString(entries))).toEqual(entries);
+  });
+});
+
+describe('MCP JSON view', () => {
+  const base: McpEditorState = {
+    id: 'time',
+    name: 'time',
+    description: '',
+    type: 'stdio',
+    command: 'npx',
+    args: '-y, pkg',
+    env: 'A=1',
+    url: '',
+    headers: '',
+    apps: { claude: true, codex: false, opencode: false },
+  };
+
+  it('editorToJson reflects the fields', () => {
+    const parsed = JSON.parse(editorToJson(base));
+    expect(parsed).toEqual({
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'pkg'],
+      env: { A: '1' },
+    });
+  });
+
+  it('jsonToEditor parses a stdio spec back into fields', () => {
+    const result = jsonToEditor(
+      JSON.stringify({ type: 'stdio', command: 'uvx', args: ['a', 'b'], env: { K: 'V' } }),
+      base,
+    );
+    expect('editor' in result).toBe(true);
+    if ('editor' in result) {
+      expect(result.editor.command).toBe('uvx');
+      expect(result.editor.args).toBe('a, b');
+      expect(result.editor.env).toBe('K=V');
+      // Identity fields are preserved from the base.
+      expect(result.editor.id).toBe('time');
+      expect(result.editor.apps.claude).toBe(true);
+    }
+  });
+
+  it('jsonToEditor parses an http spec and switches the transport', () => {
+    const result = jsonToEditor(
+      JSON.stringify({ type: 'http', url: 'https://x/mcp', headers: { A: 'b' } }),
+      base,
+    );
+    expect('editor' in result).toBe(true);
+    if ('editor' in result) {
+      expect(result.editor.type).toBe('http');
+      expect(result.editor.url).toBe('https://x/mcp');
+      expect(result.editor.headers).toBe('A=b');
+    }
+  });
+
+  it('jsonToEditor reports invalid JSON', () => {
+    const result = jsonToEditor('{ not json', base);
+    expect('error' in result).toBe(true);
+  });
+
+  it('jsonToEditor rejects a non-object', () => {
+    expect('error' in jsonToEditor('[1,2,3]', base)).toBe(true);
+    expect('error' in jsonToEditor('"text"', base)).toBe(true);
+    expect('error' in jsonToEditor('', base)).toBe(true);
+  });
+
+  it('fields and JSON round-trip through each other', () => {
+    const json = editorToJson(base);
+    const result = jsonToEditor(json, base);
+    expect('editor' in result).toBe(true);
+    if ('editor' in result) {
+      expect(editorToMcp(result.editor)).toEqual(editorToMcp(base));
+    }
   });
 });

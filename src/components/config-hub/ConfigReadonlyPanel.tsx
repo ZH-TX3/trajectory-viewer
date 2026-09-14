@@ -116,6 +116,18 @@ function FileBlock({
 
   const dirty = draft !== original;
 
+  // JSON files get a format action; other formats (md/toml/yaml) have no
+  // generic reformatter, so the button is hidden for them.
+  const isJson = file.format === 'json';
+  const formatDraft = useCallback(() => {
+    try {
+      setDraft(JSON.stringify(JSON.parse(draft), null, 2));
+      setError(null);
+    } catch (err) {
+      setError(`Invalid JSON: ${String(err)}`);
+    }
+  }, [draft]);
+
   return (
     <div className="px-3 py-2">
       <div className="flex items-center gap-2 mb-1">
@@ -125,6 +137,16 @@ function FileBlock({
         <div className="ml-auto flex items-center gap-1">
           {editing ? (
             <>
+              {isJson && (
+                <button
+                  onClick={formatDraft}
+                  disabled={saving}
+                  title="Format JSON"
+                  className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+                >
+                  format
+                </button>
+              )}
               <button
                 onClick={() => void save()}
                 disabled={saving || !dirty}
@@ -173,7 +195,7 @@ function FileBlock({
         </div>
       </div>
 
-      <div className="text-[10px] text-muted-foreground font-mono break-all mb-1">{file.path}</div>
+      <div className="text-[10px] text-blue-600 dark:text-blue-400 font-mono break-all mb-1">{file.path}</div>
 
       {error && (
         <div className="mb-1 px-2 py-1 rounded text-[10px] bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 break-all">

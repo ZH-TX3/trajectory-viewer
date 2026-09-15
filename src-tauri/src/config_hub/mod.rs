@@ -188,10 +188,11 @@ pub fn save_config_file(tool_id: &str, path: &str, content: &str) -> Result<(), 
 
 /// Open one of a tool's config files in VS Code.
 ///
-/// Prefers the `code` CLI so the file opens as a normal editor tab; if VS Code
-/// isn't on PATH, falls back to the OS default handler for the file. The same
-/// path guard as `save_config_file` applies, so only the tool's own files can
-/// be opened.
+/// VS Code may be installed anywhere and its `code` CLI is often not on PATH,
+/// so we ask the OS where it is (registry on Windows), then fall back to a
+/// `code` on PATH, and finally to the OS default handler for the file. The
+/// same path guard as `save_config_file` applies, so only the tool's own files
+/// can be opened.
 pub fn open_config_file(tool_id: &str, path: &str) -> Result<(), String> {
     let target = PathBuf::from(path);
     let allowed = editable_paths(tool_id);
@@ -204,23 +205,164 @@ pub fn open_config_file(tool_id: &str, path: &str) -> Result<(), String> {
         return Err(format!("File does not exist: {path}"));
     }
 
-    // `code` is a .cmd shim on Windows; spawn through cmd so the shell resolves it.
-    let code_attempt = if cfg!(windows) {
-        std::process::Command::new("cmd")
-            .args(["/c", "code", "--reuse-window"])
-            .arg(&target)
-            .spawn()
-    } else {
-        std::process::Command::new("code")
-            .arg("--reuse-window")
-            .arg(&target)
-            .spawn()
-    };
-
-    match code_attempt {
-        Ok(_) => Ok(()),
-        Err(_) => open_with_default(&target),
+    // 1) The CLI shim from the install the OS reports.
+    if let Some(code) = discover_vscode_cli() {
+        if spawn_code(&code, &target).is_ok() {
+            return Ok(());
+        }
     }
+
+    // 2) `code` on PATH. On Windows it's a .cmd shim that must run via `cmd /c`
+    //    (and `cmd /c` reports success even when the command is missing, so
+    //    probe with `where` first).
+    if code_on_path() && spawn_code_path_cli(&target).is_ok() {
+        return Ok(());
+    }
+
+    // 3) Whatever the OS uses for this file type.
+    open_with_default(&target)
+}
+
+/// The `code` CLI inside a VS Code install the OS knows about.
+///
+/// Nothing is hardcoded to a drive: on Windows the install location comes from
+/// the uninstall registry keys, so a custom install directory is found too.
+#[cfg(windows)]
+fn discover_vscode_cli() -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    // Query both the user and machine uninstall hives for VS Code's
+    // InstallLocation, then look for the CLI shim there.
+    let script = r#"
+$paths = @(
+  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)
+Get-ItemProperty $paths -ErrorAction SilentlyContinue |
+  Where-Object { $_.DisplayName -like '*Visual Studio Code*' -and $_.InstallLocation } |
+  Select-Object -ExpandProperty InstallLocation -Unique
+"#;
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let dir = line.trim();
+        if dir.is_empty() {
+            continue;
+        }
+        for shim in ["bin/code.cmd", "bin/code.exe", "Code.exe"] {
+            let candidate = PathBuf::from(dir).join(shim);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn discover_vscode_cli() -> Option<PathBuf> {
+    let path =
+        PathBuf::from("/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code");
+    path.is_file().then_some(path)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn discover_vscode_cli() -> Option<PathBuf> {
+    // `which code` is the reliable answer on Linux.
+    let output = std::process::Command::new("which")
+        .arg("code")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    path.is_file().then_some(path)
+}
+
+/// Launch a `code` shim (a .cmd/.exe path or the bare command name).
+///
+/// On Windows a `.cmd` must be run through `cmd /c`; a real `.exe` can be
+/// spawned directly.
+#[cfg(windows)]
+fn spawn_code(code: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    let is_cmd = code
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
+        .unwrap_or(false);
+
+    let mut cmd = if is_cmd {
+        let mut c = std::process::Command::new("cmd");
+        c.arg("/c").arg(code);
+        c
+    } else {
+        std::process::Command::new(code)
+    };
+    cmd.arg("--reuse-window")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Cannot launch VS Code: {e}"))
+}
+
+#[cfg(not(windows))]
+fn spawn_code(code: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new(code)
+        .arg("--reuse-window")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Cannot launch VS Code: {e}"))
+}
+
+/// Launch the bare `code` command (already confirmed on PATH).
+#[cfg(windows)]
+fn spawn_code_path_cli(target: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args(["/c", "code", "--reuse-window"])
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Cannot launch VS Code: {e}"))
+}
+
+#[cfg(not(windows))]
+fn spawn_code_path_cli(target: &std::path::Path) -> Result<(), String> {
+    spawn_code(Path::new("code"), target)
+}
+
+/// Whether a `code` command is actually runnable from PATH.
+#[cfg(windows)]
+fn code_on_path() -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("cmd")
+        .args(["/c", "where", "code"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn code_on_path() -> bool {
+    std::process::Command::new("sh")
+        .args(["-c", "command -v code"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Hand the file to the OS default program.
@@ -661,6 +803,58 @@ mod tests {
         #[allow(deprecated)]
         match original {
             Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::*;
+
+    /// The OS-reported VS Code CLI must be discovered without any hardcoded
+    /// path — this machine has it at a non-default location.
+    #[test]
+    #[ignore]
+    fn discovers_the_installed_vscode_cli() {
+        let found = discover_vscode_cli();
+        eprintln!("discovered: {found:?}");
+        assert!(found.is_some(), "VS Code CLI not discovered");
+    }
+
+    #[test]
+    #[ignore]
+    fn code_on_path_reports_a_bool() {
+        eprintln!("code_on_path: {}", code_on_path());
+    }
+}
+
+#[cfg(test)]
+mod open_e2e_tests {
+    use super::*;
+
+    /// End-to-end: opening a real tool config launches VS Code. Ignored by
+    /// default since it spawns a GUI app. `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn open_config_file_launches_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let original = std::env::var_os("HOME");
+        #[allow(deprecated)]
+        std::env::set_var("HOME", &home);
+
+        let target = home.join(".claude/CLAUDE.md");
+        std::fs::write(&target, "# test").unwrap();
+
+        let result = open_config_file("claude", &target.to_string_lossy());
+        eprintln!("open result: {result:?}");
+        assert!(result.is_ok(), "open failed: {result:?}");
+
+        #[allow(deprecated)]
+        match original {
+            Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
         }
     }

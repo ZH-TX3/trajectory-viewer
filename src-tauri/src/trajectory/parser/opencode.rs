@@ -1650,8 +1650,15 @@ mod tests {
     fn trash_json_session_moves_files_and_parts() {
         let _guard = opencode_env_lock().lock().unwrap();
         let dir = tempdir().unwrap();
+        // Point BOTH XDG_DATA_HOME (opencode's base) and HOME (the trash root)
+        // at the temp dir — otherwise the moved files land in the real
+        // ~/.trajectory-viewer/trash/ and pollute it with test artifacts.
+        let original_xdg = std::env::var_os("XDG_DATA_HOME");
+        let original_home = std::env::var_os("HOME");
         #[allow(deprecated)]
         std::env::set_var("XDG_DATA_HOME", dir.path());
+        #[allow(deprecated)]
+        std::env::set_var("HOME", dir.path());
 
         let storage = dir.path().join("opencode/storage");
         build_json_layout(&storage);
@@ -1660,8 +1667,27 @@ mod tests {
         assert!(storage.join("part/msg_1/prt_1.json").exists());
         let _trash_id = trash_session(session_file.to_str().unwrap()).unwrap();
 
-        #[allow(deprecated)]
-        std::env::remove_var("XDG_DATA_HOME");
+        // Restore the environment exactly as it was.
+        match original_xdg {
+            Some(value) => {
+                #[allow(deprecated)]
+                std::env::set_var("XDG_DATA_HOME", value);
+            }
+            None => {
+                #[allow(deprecated)]
+                std::env::remove_var("XDG_DATA_HOME");
+            }
+        }
+        match original_home {
+            Some(value) => {
+                #[allow(deprecated)]
+                std::env::set_var("HOME", value);
+            }
+            None => {
+                #[allow(deprecated)]
+                std::env::remove_var("HOME");
+            }
+        }
 
         assert!(!session_file.exists());
         assert!(!storage.join("message/ses_1").exists());

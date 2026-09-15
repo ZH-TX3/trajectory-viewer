@@ -18,6 +18,7 @@ pub mod dsh;
 pub mod mcp;
 pub mod migrate;
 pub mod opencode;
+pub mod profile;
 pub mod registry;
 pub mod resource;
 pub mod scan;
@@ -343,6 +344,46 @@ pub fn config_hub_tool_roots() -> Vec<crate::config_hub::settings::ToolRootInfo>
 #[tauri::command]
 pub fn config_hub_set_tool_root(tool_id: String, dir: String) -> Result<(), String> {
     crate::config_hub::settings::set_tool_root(&tool_id, &dir).map(|_| ())
+}
+
+// ── Profile commands ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn config_hub_profiles() -> Vec<profile::Profile> {
+    profile::list()
+}
+
+/// Snapshot the current enablement state under `name`.
+#[tauri::command]
+pub fn config_hub_save_profile(name: String) -> Result<profile::Profile, String> {
+    profile::capture(&name)
+}
+
+/// Create or replace a profile from explicit entries (the editor's save).
+#[tauri::command]
+pub fn config_hub_upsert_profile(
+    name: String,
+    resources: profile::ProfileEntries,
+    mcp_servers: profile::ProfileEntries,
+) -> Result<profile::Profile, String> {
+    profile::save(&name, resources, mcp_servers)
+}
+
+/// One profile plus the current live state, for the editor.
+#[tauri::command]
+pub fn config_hub_profile_detail(name: String) -> Result<profile::ProfileDetail, String> {
+    profile::detail(&name)
+}
+
+/// Reconcile the live state to match a stored profile.
+#[tauri::command]
+pub fn config_hub_apply_profile(name: String) -> Result<profile::ApplyReport, String> {
+    profile::apply(&name)
+}
+
+#[tauri::command]
+pub fn config_hub_delete_profile(name: String) -> Result<(), String> {
+    profile::delete(&name)
 }
 
 // ── MCP commands ─────────────────────────────────────────────────────────

@@ -251,3 +251,35 @@ export interface McpTestResult {
   serverVersion?: string | null;
   message: string;
 }
+
+// ── Config Hub: Profile Types ────────────────────────────────────────────
+
+/** A named snapshot of which resources are enabled for which tools. */
+export interface Profile {
+  name: string;
+  /** Skills/agents: resource id → tool ids it's enabled for. */
+  resources: Record<string, string[]>;
+  /** MCP servers: server id → tool ids it's enabled for. */
+  mcpServers: Record<string, string[]>;
+  createdAt: number;
+}
+
+/** Outcome of applying a profile. */
+export interface ApplyReport {
+  enabled: number;
+  disabled: number;
+  /** Resources skipped because the tool holds an unmanaged copy. */
+  skipped: string[];
+  errors: string[];
+}
+
+/** A profile plus the current live state, for the editor. */
+export interface ProfileDetail {
+  name: string;
+  resources: Record<string, string[]>;
+  mcpServers: Record<string, string[]>;
+  /** resource id → tool id → enabled (current live state). */
+  liveResources: Record<string, Record<string, boolean>>;
+  /** server id → tool id → enabled (current live state). */
+  liveMcp: Record<string, Record<string, boolean>>;
+}

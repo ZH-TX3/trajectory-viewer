@@ -16,19 +16,21 @@ import { ImportPreviewDialog } from './ImportPreviewDialog';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
 import { ConfigReadonlyPanel } from './ConfigReadonlyPanel';
 import { McpPanel } from './McpPanel';
+import { ProfilesSection } from './ProfilesSection';
 
 interface Notice {
   type: 'ok' | 'error';
   text: string;
 }
 
-type HubTab = 'prompts' | 'skill' | 'mcp' | 'agent';
+type HubTab = 'prompts' | 'skill' | 'mcp' | 'agent' | 'profiles';
 
 const TABS: Array<{ value: HubTab; label: string }> = [
   { value: 'prompts', label: 'Prompts & config' },
   { value: 'skill', label: 'Skills' },
   { value: 'mcp', label: 'MCP' },
   { value: 'agent', label: 'Agents' },
+  { value: 'profiles', label: 'Profiles' },
 ];
 
 export function ConfigHubView() {
@@ -197,12 +199,14 @@ export function ConfigHubView() {
         </div>
         <p className="text-[11px] text-muted-foreground mb-3">
           {tab === 'prompts'
-            ? 'Each tool’s system prompt and config files, shown read-only for now.'
+            ? 'Each tool’s system prompt and config files — view, edit, or open in VS Code.'
             : tab === 'mcp'
               ? 'MCP servers are managed from a unified store and merged into each tool’s config.'
               : tab === 'agent'
                 ? 'Agents live once in ~/.agents and are linked into the tools that support them.'
-                : 'Skills live once in ~/.agents and are linked into each tool, so one edit reaches all of them.'}
+                : tab === 'profiles'
+                  ? 'Save a setup and switch between them — applying a profile reconciles every tool to match it.'
+                  : 'Skills live once in ~/.agents and are linked into each tool, so one edit reaches all of them.'}
         </p>
 
         {/* Tabs */}
@@ -296,6 +300,17 @@ export function ConfigHubView() {
         {tab === 'mcp' && (
           <div className="rounded-lg border border-[hsl(var(--border))] overflow-hidden mb-6">
             <McpPanel />
+          </div>
+        )}
+
+        {tab === 'profiles' && (
+          <div className="rounded-lg border border-[hsl(var(--border))] p-3 mb-6">
+            <ProfilesSection
+              tools={tools}
+              resources={resources
+                .filter((r) => r.kind === 'skill' || r.kind === 'agent')
+                .map((r) => ({ id: r.id, name: r.name, kind: r.kind as 'skill' | 'agent' }))}
+            />
           </div>
         )}
 

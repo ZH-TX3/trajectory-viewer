@@ -18,6 +18,9 @@ import type {
   McpServerSpec,
   McpTestResult,
   ToolRootInfo,
+  Profile,
+  ApplyReport,
+  ProfileDetail,
 } from './types';
 
 export const api = {
@@ -193,6 +196,42 @@ export const api = {
   /** Set (or clear, with '') a tool's config-root override. */
   async configHubSetToolRoot(toolId: string, dir: string): Promise<void> {
     return await invoke('config_hub_set_tool_root', { toolId, dir });
+  },
+
+  // ── Config Hub: Profiles ───────────────────────────────────────────────
+
+  /** Every stored configuration profile. */
+  async configHubProfiles(): Promise<Profile[]> {
+    return await invoke('config_hub_profiles');
+  },
+
+  /** Snapshot the current enablement state under a name. */
+  async configHubSaveProfile(name: string): Promise<Profile> {
+    return await invoke('config_hub_save_profile', { name });
+  },
+
+  /** Create or replace a profile from explicit entries (the editor's save). */
+  async configHubUpsertProfile(
+    name: string,
+    resources: Record<string, string[]>,
+    mcpServers: Record<string, string[]>,
+  ): Promise<Profile> {
+    return await invoke('config_hub_upsert_profile', { name, resources, mcpServers });
+  },
+
+  /** One profile plus the current live state, for the editor. */
+  async configHubProfileDetail(name: string): Promise<ProfileDetail> {
+    return await invoke('config_hub_profile_detail', { name });
+  },
+
+  /** Reconcile the live state to match a stored profile. */
+  async configHubApplyProfile(name: string): Promise<ApplyReport> {
+    return await invoke('config_hub_apply_profile', { name });
+  },
+
+  /** Remove a stored profile. */
+  async configHubDeleteProfile(name: string): Promise<void> {
+    return await invoke('config_hub_delete_profile', { name });
   },
 
   // ── Config Hub: MCP ────────────────────────────────────────────────────

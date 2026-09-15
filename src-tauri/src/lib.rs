@@ -42,11 +42,15 @@ pub fn run() {
             config_hub::config_hub_undo_import,
             config_hub::config_hub_delete,
             config_hub::config_hub_save_config,
+            config_hub::config_hub_open_config,
+            config_hub::config_hub_tool_roots,
+            config_hub::config_hub_set_tool_root,
             config_hub::config_hub_mcp_list,
             config_hub::config_hub_mcp_upsert,
             config_hub::config_hub_mcp_toggle,
             config_hub::config_hub_mcp_delete,
             config_hub::config_hub_mcp_import,
+            config_hub::config_hub_mcp_test,
         ])
         .setup(|_app| {
             // Background auto-backup: run a pass on startup, then every 5 min.

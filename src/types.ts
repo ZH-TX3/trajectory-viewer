@@ -181,6 +181,14 @@ export interface ToolConfigs {
   files: ConfigFileContent[];
 }
 
+/** A tool's config root as the settings UI sees it. */
+export interface ToolRootInfo {
+  toolId: string;
+  displayName: string;
+  defaultRoot?: string | null;
+  overrideRoot?: string | null;
+}
+
 export interface HubSnapshot {
   tools: ToolInfo[];
   resources: ConfigResource[];
@@ -233,4 +241,13 @@ export interface McpEditorState {
   url: string;
   headers: string;
   apps: Record<string, boolean>;
+}
+
+/** Result of a live MCP handshake test. */
+export interface McpTestResult {
+  ok: boolean;
+  latencyMs: number;
+  serverName?: string | null;
+  serverVersion?: string | null;
+  message: string;
 }

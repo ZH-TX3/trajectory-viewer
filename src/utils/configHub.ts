@@ -31,6 +31,7 @@ export const TOOL_ACTIVE_CLASSES: Record<string, string> = {
     'bg-orange-500/10 ring-1 ring-orange-500/20 hover:bg-orange-500/20 text-orange-600 dark:text-orange-400',
   codex:
     'bg-green-500/10 ring-1 ring-green-500/20 hover:bg-green-500/20 text-green-600 dark:text-green-400',
+  dsh: 'bg-amber-500/10 ring-1 ring-amber-500/20 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400',
   opencode:
     'bg-indigo-500/10 ring-1 ring-indigo-500/20 hover:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400',
 };

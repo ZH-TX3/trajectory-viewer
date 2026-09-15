@@ -15,6 +15,7 @@
 pub mod claude;
 pub mod codex;
 pub mod opencode;
+pub mod test;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

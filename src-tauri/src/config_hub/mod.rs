@@ -21,6 +21,7 @@ pub mod opencode;
 pub mod registry;
 pub mod resource;
 pub mod scan;
+pub mod settings;
 pub mod state;
 pub mod sync;
 pub mod utils;
@@ -184,6 +185,74 @@ pub fn save_config_file(tool_id: &str, path: &str, content: &str) -> Result<(), 
     std::fs::write(&target, content).map_err(|e| format!("Cannot write {path}: {e}"))
 }
 
+/// Open one of a tool's config files in VS Code.
+///
+/// Prefers the `code` CLI so the file opens as a normal editor tab; if VS Code
+/// isn't on PATH, falls back to the OS default handler for the file. The same
+/// path guard as `save_config_file` applies, so only the tool's own files can
+/// be opened.
+pub fn open_config_file(tool_id: &str, path: &str) -> Result<(), String> {
+    let target = PathBuf::from(path);
+    let allowed = editable_paths(tool_id);
+    if !allowed.iter().any(|p| p == &target) {
+        return Err(format!(
+            "Refusing to open a file {tool_id} does not own: {path}"
+        ));
+    }
+    if !target.exists() {
+        return Err(format!("File does not exist: {path}"));
+    }
+
+    // `code` is a .cmd shim on Windows; spawn through cmd so the shell resolves it.
+    let code_attempt = if cfg!(windows) {
+        std::process::Command::new("cmd")
+            .args(["/c", "code", "--reuse-window"])
+            .arg(&target)
+            .spawn()
+    } else {
+        std::process::Command::new("code")
+            .arg("--reuse-window")
+            .arg(&target)
+            .spawn()
+    };
+
+    match code_attempt {
+        Ok(_) => Ok(()),
+        Err(_) => open_with_default(&target),
+    }
+}
+
+/// Hand the file to the OS default program.
+#[cfg(windows)]
+fn open_with_default(target: &std::path::Path) -> Result<(), String> {
+    // `cmd /c start "" <file>` — the empty title keeps `start` from treating a
+    // quoted path as its window title.
+    std::process::Command::new("cmd")
+        .args(["/c", "start", ""])
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Cannot open file: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn open_with_default(target: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Cannot open file: {e}"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_with_default(target: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Cannot open file: {e}"))
+}
+
 /// Parse a `<kind>:<name>` resource id.
 pub fn split_id(id: &str) -> Result<(ResourceKind, String), String> {
     let (kind, name) = id
@@ -258,6 +327,24 @@ pub fn config_hub_save_config(
     save_config_file(&tool_id, &path, &content)
 }
 
+#[tauri::command]
+pub fn config_hub_open_config(tool_id: String, path: String) -> Result<(), String> {
+    open_config_file(&tool_id, &path)
+}
+
+/// Current per-tool config-root overrides, plus each tool's auto-detected
+/// default, so the settings UI can show what's in play.
+#[tauri::command]
+pub fn config_hub_tool_roots() -> Vec<crate::config_hub::settings::ToolRootInfo> {
+    crate::config_hub::settings::tool_root_infos()
+}
+
+/// Set (or clear, with an empty dir) a tool's config-root override.
+#[tauri::command]
+pub fn config_hub_set_tool_root(tool_id: String, dir: String) -> Result<(), String> {
+    crate::config_hub::settings::set_tool_root(&tool_id, &dir).map(|_| ())
+}
+
 // ── MCP commands ─────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -289,6 +376,21 @@ pub fn config_hub_mcp_delete(id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn config_hub_mcp_import() -> Result<usize, String> {
     mcp::import_from_apps()
+}
+
+/// Run a live handshake against one stored MCP server.
+///
+/// Long-running by nature (spawns a process or makes a network call), so it
+/// runs off the main thread.
+#[tauri::command]
+pub async fn config_hub_mcp_test(id: String) -> Result<mcp::test::McpTestResult, String> {
+    let server = mcp::list()
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| format!("MCP server not found: {id}"))?;
+    tauri::async_runtime::spawn_blocking(move || mcp::test::test_server(&server.server))
+        .await
+        .map_err(|e| format!("Test task failed: {e}"))
 }
 
 #[cfg(test)]

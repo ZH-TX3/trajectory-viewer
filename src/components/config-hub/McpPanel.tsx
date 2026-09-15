@@ -5,9 +5,19 @@
 // toggling writes into each enabled tool's live config.
 
 import { useCallback, useEffect, useState } from 'react';
-import { Download, Loader2, Pencil, Plus, RefreshCw, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Loader2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Zap,
+} from 'lucide-react';
 import { api } from '../../api';
-import type { McpEditorState, McpServer } from '../../types';
+import type { McpEditorState, McpServer, McpTestResult } from '../../types';
 import {
   TOOL_ACTIVE_CLASSES,
   editorToMcp,
@@ -37,6 +47,20 @@ export function McpPanel() {
   const [editor, setEditor] = useState<McpEditorState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<McpServer | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, McpTestResult>>({});
+  const [elapsed, setElapsed] = useState(0);
+
+  // Tick while a test runs so the user can see it's still working — a stdio
+  // server may take a while on first run (npx downloads the package).
+  useEffect(() => {
+    if (testing === null) {
+      setElapsed(0);
+      return;
+    }
+    const timer = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, [testing]);
 
   const toggleExpanded = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -45,6 +69,21 @@ export function McpPanel() {
       else next.add(id);
       return next;
     });
+  }, []);
+
+  const handleTest = useCallback(async (id: string) => {
+    setTesting(id);
+    try {
+      const result = await api.configHubMcpTest(id);
+      setTestResults((prev) => ({ ...prev, [id]: result }));
+    } catch (err) {
+      setTestResults((prev) => ({
+        ...prev,
+        [id]: { ok: false, latencyMs: 0, message: String(err) },
+      }));
+    } finally {
+      setTesting(null);
+    }
   }, []);
 
   const refresh = useCallback(async () => {
@@ -285,22 +324,76 @@ export function McpPanel() {
                         </button>
                       );
                     })}
-                    <button
-                      onClick={() => openEdit(server)}
-                      title="Edit"
-                      className="ml-1 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-                    >
-                      <Pencil className="size-3" />
-                    </button>
-                    <button
-                      onClick={() => setPendingDelete(server)}
-                      title="Delete"
-                      className="p-1 rounded text-red-500 hover:bg-red-500/10 transition-colors"
-                    >
-                      <Trash2 className="size-3" />
-                    </button>
+                    {/* Row actions, grouped in a border so they read as one
+                        cluster distinct from the per-tool enable switches. */}
+                    <div className="ml-1 flex items-center gap-0.5 rounded-md border border-[hsl(var(--border))] p-0.5 shrink-0">
+                      <button
+                        onClick={() => void handleTest(server.id)}
+                        disabled={testing !== null}
+                        title="Test connection (runs a real MCP handshake)"
+                        className="p-1 rounded text-muted-foreground hover:text-amber-600 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+                      >
+                        {testing === server.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Zap className="size-3" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => openEdit(server)}
+                        title="Edit"
+                        className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        onClick={() => setPendingDelete(server)}
+                        title="Delete"
+                        className="p-1 rounded text-red-500 hover:bg-red-500/10 transition-colors"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
                   </div>
                 </div>
+
+                {testing === server.id && (
+                  <div className="mx-4 mb-2 px-2 py-1 rounded text-[10px] bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300 flex items-center gap-2">
+                    <Loader2 className="size-3 animate-spin shrink-0" />
+                    <span>
+                      Testing handshake… {elapsed}s
+                      {elapsed >= 3 && (
+                        <span className="opacity-70">
+                          {' '}
+                          (a stdio server may download its package on first run)
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
+
+                {testing !== server.id && testResults[server.id] && (
+                  <div
+                    className={cn(
+                      'mx-4 mb-2 px-2 py-1 rounded text-[10px] break-all',
+                      testResults[server.id].ok
+                        ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
+                        : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300',
+                    )}
+                  >
+                    {testResults[server.id].ok ? '✓ ' : '✗ '}
+                    {testResults[server.id].ok && testResults[server.id].serverName
+                      ? `${testResults[server.id].serverName}${
+                          testResults[server.id].serverVersion
+                            ? ` v${testResults[server.id].serverVersion}`
+                            : ''
+                        } — `
+                      : ''}
+                    {testResults[server.id].message}
+                    {testResults[server.id].latencyMs > 0 &&
+                      ` (${testResults[server.id].latencyMs} ms)`}
+                  </div>
+                )}
 
                 {isOpen && (
                   <pre className="mx-4 mb-2 text-[10px] leading-relaxed font-mono whitespace-pre-wrap break-all rounded bg-muted/30 p-2 max-h-64 overflow-auto">

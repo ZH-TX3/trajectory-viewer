@@ -114,6 +114,15 @@ function FileBlock({
     }
   }, [toolId, file.path, draft, onSaved]);
 
+  const openInEditor = useCallback(async () => {
+    setError(null);
+    try {
+      await api.configHubOpenConfig(toolId, file.path);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [toolId, file.path]);
+
   const dirty = draft !== original;
 
   // JSON files get a format action; other formats (md/toml/yaml) have no
@@ -195,7 +204,13 @@ function FileBlock({
         </div>
       </div>
 
-      <div className="text-[10px] text-blue-600 dark:text-blue-400 font-mono break-all mb-1">{file.path}</div>
+      <button
+        onClick={() => void openInEditor()}
+        title="Open in VS Code"
+        className="block w-full text-left text-[10px] text-blue-600 dark:text-blue-400 font-mono break-all mb-1 hover:underline"
+      >
+        {file.path}
+      </button>
 
       {error && (
         <div className="mb-1 px-2 py-1 rounded text-[10px] bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 break-all">

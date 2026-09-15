@@ -23,7 +23,7 @@ impl ToolProvider for CodexTool {
 
     fn root(&self) -> Option<PathBuf> {
         let dir = home_dir()?.join(".codex");
-        dir.is_dir().then_some(dir)
+        crate::config_hub::settings::resolve_root(self.id(), dir)
     }
 
     fn linkable_dirs(&self) -> Vec<LinkTarget> {

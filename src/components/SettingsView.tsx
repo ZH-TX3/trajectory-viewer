@@ -29,6 +29,7 @@ import { ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware } from './icons/B
 import { cn } from '../lib/utils';
 import { BackupSection } from './BackupSection';
 import { TrashSection } from './TrashSection';
+import { ToolRootsSection } from './config-hub/ToolRootsSection';
 
 type SettingsTab = 'general' | 'advanced';
 
@@ -227,6 +228,8 @@ export function SettingsView({
                 </div>
                 <BackupSection />
               </section>
+
+              <ToolRootsSection />
 
               <section className="rounded-xl border border-border/40 overflow-hidden">
                 <div className="px-4 py-3 border-b border-border/40">

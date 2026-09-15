@@ -105,6 +105,36 @@ export function ConfigHubView() {
     }
   }, []);
 
+  /**
+   * Enable or disable one resource across several tools at once.
+   *
+   * Tools holding an unmanaged copy are skipped — turning those off would
+   * delete the user's own file, and they must be imported first.
+   */
+  const handleToggleAll = useCallback(
+    async (resource: ConfigResource, targets: string[], enabled: boolean) => {
+      setBusyKey(`all:${resource.id}`);
+      setNotice(null);
+      const failures: string[] = [];
+      try {
+        for (const target of targets) {
+          try {
+            await api.configHubToggle(resource.id, target, enabled);
+          } catch (err) {
+            failures.push(`${target}: ${String(err)}`);
+          }
+        }
+        if (failures.length > 0) {
+          setNotice({ type: 'error', text: failures.join('; ') });
+        }
+        await refresh();
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [refresh],
+  );
+
   const confirmImport = useCallback(
     async (overwrite: boolean) => {
       if (!importPreview) return;
@@ -255,6 +285,7 @@ export function ConfigHubView() {
                 tools={tools}
                 busyKey={busyKey}
                 onToggle={handleToggle}
+                onToggleAll={handleToggleAll}
                 onImport={openImport}
                 onDelete={setPendingDelete}
               />

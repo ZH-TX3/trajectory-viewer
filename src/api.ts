@@ -16,6 +16,8 @@ import type {
   ImportPreview,
   McpServer,
   McpServerSpec,
+  McpTestResult,
+  ToolRootInfo,
 } from './types';
 
 export const api = {
@@ -178,6 +180,21 @@ export const api = {
     return await invoke('config_hub_save_config', { toolId, path, content });
   },
 
+  /** Open one of a tool's config files in VS Code (falls back to the OS default). */
+  async configHubOpenConfig(toolId: string, path: string): Promise<void> {
+    return await invoke('config_hub_open_config', { toolId, path });
+  },
+
+  /** Current config-root overrides for every tool. */
+  async configHubToolRoots(): Promise<ToolRootInfo[]> {
+    return await invoke('config_hub_tool_roots');
+  },
+
+  /** Set (or clear, with '') a tool's config-root override. */
+  async configHubSetToolRoot(toolId: string, dir: string): Promise<void> {
+    return await invoke('config_hub_set_tool_root', { toolId, dir });
+  },
+
   // ── Config Hub: MCP ────────────────────────────────────────────────────
 
   /** List every MCP server in the unified store. */
@@ -209,5 +226,10 @@ export const api = {
   /** Import live MCP configs from all installed tools; returns the count. */
   async configHubMcpImport(): Promise<number> {
     return await invoke('config_hub_mcp_import');
+  },
+
+  /** Run a live MCP handshake against one stored server. */
+  async configHubMcpTest(id: string): Promise<McpTestResult> {
+    return await invoke('config_hub_mcp_test', { id });
   },
 };

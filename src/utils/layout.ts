@@ -63,6 +63,12 @@ export interface TrajectoryCellProps {
   result?: string;
   resultPreviewMarkdown?: string;
 
+  /** Subagent dispatch (kind === 'subtool'): requested agent type, its
+   *  one-line description, and whether it was launched in the background. */
+  subagentType?: string;
+  subagentDescription?: string;
+  subagentBackground?: boolean;
+
   /** Timing */
   timeSeconds: number | null;
   startedAt?: number | null;
@@ -170,11 +176,49 @@ export function deriveTrajectoryLayout(
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+/**
+ * Tools that dispatch a subagent: Claude's `Agent` (named `Task` in older
+ * transcripts). Matched on the exact tool name — `TaskCreate`/`TaskUpdate` are
+ * task-tracking tools, not subagent dispatches, so they must not match.
+ */
+function isSubagentTool(toolName: string | null | undefined): boolean {
+  if (toolName == null) return false;
+  const name = toolName.trim().toLowerCase();
+  return name === 'agent' || name === 'task';
+}
+
+interface SubagentInfo {
+  type?: string;
+  description?: string;
+  background: boolean;
+}
+
+/** Pull the dispatch details out of an `Agent` call's JSON arguments. */
+function subagentInfo(toolArgs: string | null | undefined): SubagentInfo {
+  if (toolArgs == null) return { background: false };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(toolArgs);
+  } catch {
+    return { background: false };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { background: false };
+  }
+  const record = parsed as Record<string, unknown>;
+  return {
+    type: typeof record.subagent_type === 'string' ? record.subagent_type : undefined,
+    description: typeof record.description === 'string' ? record.description : undefined,
+    background: record.run_in_background === true,
+  };
+}
+
 function eventToCell(
   event: TrajectoryEvent,
   index: number,
 ): TrajectoryCellProps | null {
   const timeSeconds = event.durationMs != null ? event.durationMs / 1000 : null;
+  const subagent = isSubagentTool(event.toolName) ? subagentInfo(event.toolArgs) : null;
 
   switch (event.eventType) {
     case 'user-message':
@@ -248,9 +292,12 @@ function eventToCell(
         output: event.outputTokens ?? undefined,
         cacheRead: event.cacheReadTokens ?? undefined,
         cacheWrite: event.cacheWriteTokens ?? undefined,
-        kind: 'tool',
-        text: event.toolName ?? 'Tool call',
+        kind: subagent !== null ? 'subtool' : 'tool',
+        text: subagent !== null ? subagentCellText(subagent, event.toolName) : (event.toolName ?? 'Tool call'),
         inputDetail: event.toolArgs,
+        subagentType: subagent?.type,
+        subagentDescription: subagent?.description,
+        subagentBackground: subagent?.background,
         previewMarkdown: event.toolName
           ? `**${event.toolName}**\n\`\`\`json\n${event.toolArgs ?? ''}\n\`\`\``
           : undefined,
@@ -272,10 +319,12 @@ function eventToCell(
         output: event.outputTokens ?? undefined,
         cacheRead: event.cacheReadTokens ?? undefined,
         cacheWrite: event.cacheWriteTokens ?? undefined,
-        kind: 'tool',
+        kind: subagent !== null ? 'subtool' : 'tool',
         text: truncateContent(event.toolResult, 120),
         result: event.toolResult,
         resultPreviewMarkdown: event.toolResult,
+        subagentType: subagent?.type,
+        subagentBackground: subagent?.background,
       } as TrajectoryCellProps;
 
     case 'turn-boundary':
@@ -357,6 +406,17 @@ function truncateContent(content: string | null | undefined, maxLen: number): st
   const trimmed = content.replace(/\s+/g, ' ').trim();
   if (trimmed.length <= maxLen) return trimmed;
   return trimmed.slice(0, maxLen) + '…';
+}
+
+/**
+ * Row text for a subagent dispatch: its one-line description, falling back to
+ * the requested agent type. The type itself is shown as the row's chip.
+ */
+function subagentCellText(info: SubagentInfo, toolName: string | null): string {
+  if (info.description !== undefined && info.description !== '') {
+    return truncateContent(info.description, 120);
+  }
+  return info.type ?? toolName ?? 'Agent';
 }
 
 // ── Virtual row helpers ───────────────────────────────────────────────────

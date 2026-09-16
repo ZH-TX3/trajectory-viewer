@@ -44,6 +44,18 @@ function CompactedIcon() {
   );
 }
 
+/** A node fanning out to two child nodes — a dispatched subagent. */
+function SubagentIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="6" y="1.5" width="4" height="3.5" rx="1" />
+      <rect x="1.5" y="11" width="4" height="3.5" rx="1" />
+      <rect x="10.5" y="11" width="4" height="3.5" rx="1" />
+      <path d="M8 5v2.5M3.5 11V8.8A1 1 0 0 1 4.5 7.8h7a1 1 0 0 1 1 1V11" />
+    </svg>
+  );
+}
+
 const KIND_ICON: Record<string, React.ReactNode> = {
   system: null,
   user: <UserIcon />,
@@ -51,7 +63,7 @@ const KIND_ICON: Record<string, React.ReactNode> = {
   compacted: <CompactedIcon />,
   message: <SparkleIcon />,
   tool: <ToolWrenchIcon />,
-  subtool: <ToolWrenchIcon />,
+  subtool: <SubagentIcon />,
 };
 
 const KIND_COLOR: Record<string, string> = {
@@ -61,7 +73,7 @@ const KIND_COLOR: Record<string, string> = {
   compacted: 'text-gray-400',
   message: 'text-violet-600 dark:text-violet-400',
   tool: 'text-amber-600 dark:text-amber-400',
-  subtool: 'text-amber-500 dark:text-amber-300',
+  subtool: 'text-cyan-600 dark:text-cyan-400',
 };
 
 // Label anchor: every row right-aligns its icon+label toward the content
@@ -102,6 +114,8 @@ export function TrajectoryCell({
   resultPreviewMarkdown,
   isError,
   toolName,
+  subagentType,
+  subagentBackground,
   opensTurn,
   onClick,
   onDoubleClickTurn,
@@ -176,7 +190,22 @@ export function TrajectoryCell({
       {/* Content column */}
       <td className="py-0.5 px-2 align-middle min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          {toolName && (
+          {kind === 'subtool' && (
+            <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] font-mono bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300">
+              {subagentType ?? toolName ?? 'Agent'}
+            </span>
+          )}
+
+          {kind === 'subtool' && subagentBackground && (
+            <span
+              title="Launched in the background"
+              className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-muted text-muted-foreground"
+            >
+              bg
+            </span>
+          )}
+
+          {toolName && kind !== 'subtool' && (
             <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] font-mono bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
               {toolName}
             </span>

@@ -257,7 +257,7 @@ function SummaryTab({
             <KeyValue label="Turn" value={`Turn ${request.turn}`} />
             <KeyValue label="Step" value={request.group} />
             <KeyValue label="Tool calls" value={request.toolCalls} />
-            {request.subtoolCalls > 0 && <KeyValue label="Subtool calls" value={request.subtoolCalls} />}
+            {request.subtoolCalls > 0 && <KeyValue label="Subagent calls" value={request.subtoolCalls} />}
             {request.usage !== undefined && (
               <>
                 <KeyValue label="Input tokens" value={formatTokenCount(request.usage.input)} />
@@ -272,6 +272,19 @@ function SummaryTab({
           <>
             <KeyValue label="Status" value={cell.isError ? 'Error' : 'Complete'} error={cell.isError === true} />
             <KeyValue label="Type" value={KIND_LABEL[cell.kind] ?? cell.kind} />
+            {cell.kind === 'subtool' && (
+              <>
+                {cell.subagentType !== undefined && (
+                  <KeyValue label="Agent" value={cell.subagentType} />
+                )}
+                {cell.subagentDescription !== undefined && cell.subagentDescription !== '' && (
+                  <KeyValue label="Description" value={cell.subagentDescription} />
+                )}
+                {cell.subagentBackground === true && (
+                  <KeyValue label="Run mode" value="Background" />
+                )}
+              </>
+            )}
             <KeyValue label="Index" value={String(cell.index)} />
             <TokenRows cell={cell} />
           </>

@@ -106,5 +106,5 @@ export const KIND_LABEL: Record<string, string> = {
   compacted: 'COMPACTED',
   message: 'ASSISTANT',
   tool: 'TOOL',
-  subtool: 'SUBTOOL',
+  subtool: 'SUBAGENT',
 };

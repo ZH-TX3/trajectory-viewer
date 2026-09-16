@@ -209,6 +209,77 @@ describe('trajectoryTimelineFocusIndexes', () => {
   });
 });
 
+describe('subagent dispatch cells', () => {
+  const agentArgs = JSON.stringify({
+    description: 'Audit the parser',
+    prompt: '...',
+    subagent_type: 'Explore',
+  });
+
+  function cellsOf(events: TrajectoryEvent[]) {
+    return deriveTrajectoryLayout(events).flatMap((t) => t.groups.flatMap((g) => g.cells));
+  }
+
+  it('marks an Agent tool-call and its result as subtool', () => {
+    const cells = cellsOf([
+      event({ seq: 1, eventType: 'tool-call', toolName: 'Agent', toolArgs: agentArgs, toolCallId: 'c1' }),
+      event({ seq: 2, eventType: 'tool-result', toolName: 'Agent', toolResult: 'done', toolCallId: 'c1' }),
+    ]);
+    expect(cells.map((c) => c.kind)).toEqual(['subtool', 'subtool']);
+  });
+
+  it('extracts the agent type, description and background flag', () => {
+    const [cell] = cellsOf([
+      event({ seq: 1, eventType: 'tool-call', toolName: 'Agent', toolArgs: agentArgs }),
+    ]);
+    expect(cell.subagentType).toBe('Explore');
+    expect(cell.subagentDescription).toBe('Audit the parser');
+    expect(cell.text).toBe('Audit the parser');
+    expect(cell.subagentBackground).toBe(false);
+  });
+
+  it('flags background dispatches', () => {
+    const [cell] = cellsOf([
+      event({
+        seq: 1,
+        eventType: 'tool-call',
+        toolName: 'Agent',
+        toolArgs: JSON.stringify({ description: 'x', run_in_background: true }),
+      }),
+    ]);
+    expect(cell.subagentBackground).toBe(true);
+  });
+
+  it('accepts the legacy Task name but not task-tracking tools', () => {
+    const kinds = cellsOf([
+      event({ seq: 1, eventType: 'tool-call', toolName: 'Task', toolArgs: agentArgs }),
+      event({ seq: 2, eventType: 'tool-call', toolName: 'TaskCreate', toolArgs: '{"subject":"x"}' }),
+      event({ seq: 3, eventType: 'tool-call', toolName: 'TaskUpdate', toolArgs: '{"id":"1"}' }),
+    ]).map((c) => c.kind);
+    expect(kinds).toEqual(['subtool', 'tool', 'tool']);
+  });
+
+  it('stays a plain tool when the arguments are unparseable', () => {
+    const [cell] = cellsOf([
+      event({ seq: 1, eventType: 'tool-call', toolName: 'Agent', toolArgs: 'not json' }),
+    ]);
+    expect(cell.kind).toBe('subtool');
+    expect(cell.subagentType).toBeUndefined();
+    expect(cell.text).toBe('Agent');
+  });
+
+  it('counts subagent calls in the request aggregate', () => {
+    const turns = deriveTrajectoryLayout([
+      event({ seq: 1, eventType: 'user-message', content: 'go', turn: 1, step: 0 }),
+      event({ seq: 2, eventType: 'tool-call', toolName: 'Agent', toolArgs: agentArgs, turn: 1, step: 1 }),
+      event({ seq: 3, eventType: 'tool-call', toolName: 'Bash', toolArgs: '{}', turn: 1, step: 1 }),
+    ]);
+    const request = aggregateRequestDetail(turns, 1);
+    expect(request?.subtoolCalls).toBe(1);
+    expect(request?.toolCalls).toBe(1);
+  });
+});
+
 describe('TrajectorySearchIndex', () => {
   const events = [
     event({ seq: 1, eventType: 'user-message', content: 'find the config file' }),

@@ -61,6 +61,46 @@ pub fn empty_trash() -> Result<usize, String> {
     crate::trash::empty_trash()
 }
 
+// ── Cross-session search ─────────────────────────────────────────────────
+
+/// Search every indexed session's messages.
+#[tauri::command]
+pub fn search_sessions(
+    query: String,
+    providers: Vec<String>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::search::SearchHit>, String> {
+    crate::search::search(&query, &providers, limit)
+}
+
+/// Index status (how many sessions/documents are searchable).
+#[tauri::command]
+pub fn search_index_status() -> crate::search::IndexStatus {
+    crate::search::status()
+}
+
+/// Refresh the search index.
+///
+/// Runs on a background thread and streams `search-index-progress` events, so
+/// a first full build over a large corpus doesn't block the UI. Resolves with
+/// the final counts.
+#[tauri::command]
+pub async fn reindex_search(
+    app: tauri::AppHandle,
+    providers: Vec<String>,
+    force: Option<bool>,
+) -> Result<crate::search::IndexStats, String> {
+    use tauri::Emitter;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::search::reindex(&providers, force.unwrap_or(false), |progress| {
+            let _ = app.emit("search-index-progress", progress);
+        })
+    })
+    .await
+    .map_err(|e| format!("Indexing task failed: {e}"))?
+}
+
 /// Last-modified timestamp (ms) of a session file, for change polling.
 #[tauri::command]
 pub fn get_session_mtime(source_path: String) -> Result<i64, String> {

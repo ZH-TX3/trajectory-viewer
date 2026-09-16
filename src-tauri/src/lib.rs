@@ -4,6 +4,7 @@ mod backup;
 mod commands;
 mod config_hub;
 mod export;
+mod search;
 mod session_manager;
 mod trajectory;
 mod trash;
@@ -57,6 +58,9 @@ pub fn run() {
             config_hub::config_hub_mcp_delete,
             config_hub::config_hub_mcp_import,
             config_hub::config_hub_mcp_test,
+            commands::search_sessions,
+            commands::search_index_status,
+            commands::reindex_search,
         ])
         .setup(|_app| {
             // Background auto-backup: run a pass on startup, then every 5 min.
@@ -68,6 +72,14 @@ pub fn run() {
             // Drop trash entries older than 30 days (trash is still directly
             // manageable in the UI; this is just unbounded-growth protection).
             let _ = crate::trash::purge_old_entries(30);
+            // Refresh the search index in the background. The first run over a
+            // full corpus is slow, so it must not block startup; later runs
+            // only touch sessions whose source changed.
+            std::thread::spawn(|| {
+                if let Err(err) = crate::search::reindex(&[], false, |_| {}) {
+                    eprintln!("[search] startup index refresh failed: {err}");
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

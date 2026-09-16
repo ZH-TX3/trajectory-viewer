@@ -29,6 +29,7 @@ import { ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware } from './icons/B
 import { cn } from '../lib/utils';
 import { BackupSection } from './BackupSection';
 import { TrashSection } from './TrashSection';
+import { SearchIndexSection } from './SearchIndexSection';
 import { ToolRootsSection } from './config-hub/ToolRootsSection';
 
 type SettingsTab = 'general' | 'advanced';
@@ -241,6 +242,27 @@ export function SettingsView({
                 </div>
                 <TrashSection />
               </section>
+
+
+                <section className="rounded-xl border border-border/40 overflow-hidden">
+
+                  <div className="px-4 py-3 border-b border-border/40">
+
+                    <h2 className="text-xs font-medium">Search index</h2>
+
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+
+                      Conversations are indexed in the background so the sidebar search
+
+                      covers every session, not just the one on screen.
+
+                    </p>
+
+                  </div>
+
+                  <SearchIndexSection providers={providerOrder} />
+
+                </section>
             </>
           )}
         </div>

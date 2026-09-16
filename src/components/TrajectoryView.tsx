@@ -17,9 +17,15 @@ import type { TrajectoryData } from '../types';
 
 interface TrajectoryViewProps {
   data: TrajectoryData;
+  /**
+   * Timestamp of the message to scroll to and open. Set when arriving from a
+   * cross-session search result, so the table lands on the exact match rather
+   * than highlighting every occurrence of the query.
+   */
+  focusTs?: number | null;
 }
 
-export function TrajectoryView({ data }: TrajectoryViewProps) {
+export function TrajectoryView({ data, focusTs }: TrajectoryViewProps) {
   // UI state
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedTurns, setCollapsedTurns] = useState<Set<number>>(new Set());
@@ -33,6 +39,29 @@ export function TrajectoryView({ data }: TrajectoryViewProps) {
     if (!data) return [] as readonly TrajectoryTurnModel[];
     return deriveTrajectoryLayout(data.events);
   }, [data]);
+
+  // When told to focus a message (cross-session search result), select and
+  // open the record whose start time is closest to the target. The first
+  // source row matching the ts wins.
+  useEffect(() => {
+    if (focusTs == null || turns.length === 0) return;
+    let bestIndex: number | null = null;
+    let bestDiff = Infinity;
+    for (const turn of turns) {
+      for (const group of turn.groups) {
+        for (const cell of group.cells) {
+          const start = cell.startedAt;
+          if (start == null || !Number.isFinite(start)) continue;
+          const diff = Math.abs(start - focusTs);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestIndex = cell.index;
+          }
+        }
+      }
+    }
+    if (bestIndex !== null) setSelectedRecordIndex(bestIndex);
+  }, [focusTs, turns]);
 
   // Search index (ported from DSH TrajectorySearchIndex): one stable index
   // keyed by record id, rebuilt as layouts change, queried for the input.

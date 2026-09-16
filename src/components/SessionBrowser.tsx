@@ -8,6 +8,7 @@ import type { FC } from 'react';
 import { api } from '../api';
 import { TrajectoryView } from './TrajectoryView';
 import { TrajectoryErrorBoundary } from './TrajectoryErrorBoundary';
+import { SidebarSearch } from './SidebarSearch';
 import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import {
   ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware,
@@ -110,6 +111,27 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   const [copied, setCopied] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  // Timestamp of the matched message to focus after opening a cross-session
+  // result — the table scrolls to and opens that record, instead of drowning
+  // the whole session in highlights.
+  const [focusTs, setFocusTs] = useState<number | null>(null);
+  // Cross-session search query; owned here so ESC can clear it and return the
+  // sidebar to the normal session list.
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // ESC cancels the cross-session search and any seeded in-session highlight,
+  // returning the sidebar to the normal session list. TrajectoryView has its
+  // own ESC for the timeline/table selection.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSearchQuery('');
+        setFocusTs(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // ── Sidebar resize handling ────────────────────────────────────────
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -285,7 +307,36 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     setSelectedKey(key);
     // Keep the current tab (Messages / Trajectory) across session switches.
     setTrajectoryData(null);
+    setFocusTs(null);
   }, []);
+
+  /**
+   * Jump to a cross-session search result.
+   *
+   * Order matters: the auto-select effect below resets `selectedKey` when the
+   * target isn't in the currently filtered list, so the provider filter and
+   * group expansion must be updated in the same batch as the selection.
+   */
+  const handleOpenSearchResult = useCallback(
+    (group: { provider: string; sessionId: string; sessionKey: string }, focusTs: number | null) => {
+      setProviderFilter(group.provider as ProviderFilter);
+      setExpandedGroups((prev) => {
+        const next = new Set(prev);
+        // Expand whichever project group contains the target session.
+        const target = sessions.find(
+          (s) => `${s.providerId}::${s.sessionId}` === group.sessionKey,
+        );
+        if (target) next.add(groupNameFor(target));
+        return next;
+      });
+      setSelectedKey(group.sessionKey);
+      setTrajectoryData(null);
+      // Land on Trajectory and jump to the exact matched message.
+      setActiveTab('trajectory');
+      setFocusTs(focusTs);
+    },
+    [sessions],
+  );
 
   const toggleGroup = useCallback((name: string) => {
     setExpandedGroups((prev) => {
@@ -500,6 +551,13 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
           </button>
         </div>
 
+        {/* Session list — replaced by grouped search results while a query is active */}
+        <SidebarSearch
+          providers={providerFilter === 'all' ? [] : [providerFilter]}
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          onOpenResult={handleOpenSearchResult}
+        >
         {/* Grouped session list */}
         <div className="flex-1 overflow-auto">
           {loading ? (
@@ -620,6 +678,8 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
             </div>
           )}
         </div>
+
+        </SidebarSearch>
 
         {/* Open file button */}
         <div className="p-2 border-t border-border/40">
@@ -784,7 +844,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                   </div>
                 ) : trajectoryData ? (
                   <TrajectoryErrorBoundary>
-                    <TrajectoryView data={trajectoryData} />
+                    <TrajectoryView data={trajectoryData} focusTs={focusTs} />
                   </TrajectoryErrorBoundary>
                 ) : (
                   <div className="flex items-center justify-center h-20 text-xs text-muted-foreground">
@@ -888,6 +948,21 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
 }
 
 // ── Grouping helper ──────────────────────────────────────────────────────
+
+/** The project group a session belongs to (shared by grouping and jumping). */
+function groupNameFor(session: SessionMeta): string {
+  return (
+    session.projectGroup ??
+    session.projectDir ??
+    (session.providerId === 'claude'
+      ? 'AI Code'
+      : session.providerId === 'dsh'
+        ? 'DSH'
+        : session.providerId === 'opencode'
+          ? 'OpenCode'
+          : 'Codex')
+  );
+}
 
 function groupByProject(
   sessions: SessionMeta[],

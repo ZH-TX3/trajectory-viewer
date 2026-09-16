@@ -283,3 +283,45 @@ export interface ProfileDetail {
   /** server id → tool id → enabled (current live state). */
   liveMcp: Record<string, Record<string, boolean>>;
 }
+// ── Cross-session search ─────────────────────────────────────────────────
+
+/** One matching message from the cross-session index. */
+export interface SearchHit {
+  sessionKey: string;
+  provider: string;
+  sessionId: string;
+  title: string;
+  role: string;
+  ts?: number | null;
+  /** Original text around the match. */
+  snippet: string;
+  /** Character offset of the match inside `snippet` (null when the hit came
+   *  from the session title rather than the body). */
+  matchStart?: number | null;
+  matchLen: number;
+}
+
+/** Hits for one session, i.e. one conversation in the result list. */
+export interface SearchSessionGroup {
+  sessionKey: string;
+  provider: string;
+  sessionId: string;
+  title: string;
+  /** Newest match time in this session, for ordering. */
+  latestTs: number | null;
+  hits: SearchHit[];
+}
+
+/** Search index bookkeeping, shown in settings. */
+export interface SearchIndexStatus {
+  indexedSessions: number;
+  totalDocs: number;
+  exists: boolean;
+}
+
+/** Progress event while the index is being built. */
+export interface SearchIndexProgress {
+  done: number;
+  total: number;
+  current: string;
+}

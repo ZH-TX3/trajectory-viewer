@@ -21,6 +21,8 @@ import type {
   Profile,
   ApplyReport,
   ProfileDetail,
+  SearchHit,
+  SearchIndexStatus,
 } from './types';
 
 export const api = {
@@ -270,5 +272,25 @@ export const api = {
   /** Run a live MCP handshake against one stored server. */
   async configHubMcpTest(id: string): Promise<McpTestResult> {
     return await invoke('config_hub_mcp_test', { id });
+  },
+  // ── Cross-session search ───────────────────────────────────────────────
+
+  /** Search every indexed session's messages. */
+  async searchSessions(
+    query: string,
+    providers: string[],
+    limit?: number,
+  ): Promise<SearchHit[]> {
+    return await invoke('search_sessions', { query, providers, limit });
+  },
+
+  /** How many sessions/documents the index currently covers. */
+  async searchIndexStatus(): Promise<SearchIndexStatus> {
+    return await invoke('search_index_status');
+  },
+
+  /** Refresh the search index (streams `search-index-progress` events). */
+  async reindexSearch(providers: string[], force = false): Promise<unknown> {
+    return await invoke('reindex_search', { providers, force });
   },
 };

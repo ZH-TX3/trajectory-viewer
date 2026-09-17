@@ -10,6 +10,7 @@ import { TrajectoryView } from './TrajectoryView';
 import { TrajectoryErrorBoundary } from './TrajectoryErrorBoundary';
 import { SidebarSearch } from './SidebarSearch';
 import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
+import { cn } from '../lib/utils';
 import {
   ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware,
 } from './icons/BrandIcons';
@@ -39,6 +40,36 @@ function resumeCommandFor(session: SessionMeta | null): string {
   if (session.providerId === 'claude') return session.resumeCommand ?? `claude --resume ${id}`;
   if (session.providerId === 'codex') return session.resumeCommand ?? `codex resume ${id}`;
   return session.resumeCommand ?? '';
+}
+
+/** Longer message content (especially tool output) shows collapsed by default. */
+const MESSAGE_COLLAPSE_CHARS = 500;
+
+function MessageContent({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  // Collapse when the text is too long OR spills past 3 lines (common for tool
+  // file dumps), so a short-but-multi-line block is still previewed compactly.
+  const tooLong = text.length > MESSAGE_COLLAPSE_CHARS || text.split('\n').length > 3;
+  return (
+    <div>
+      <div
+        className={cn(
+          'text-xs text-foreground/80 whitespace-pre-wrap break-words leading-relaxed',
+          !expanded && tooLong && 'line-clamp-3',
+        )}
+      >
+        {text}
+      </div>
+      {tooLong && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 text-[10px] text-blue-600 dark:text-blue-400 hover:underline transition-colors"
+        >
+          {expanded ? 'Show less' : `Show more (${text.length.toLocaleString()} chars)`}
+        </button>
+      )}
+    </div>
+  );
 }
 
 // Filter chips: same shape as the settings toggle, rendered from one array.
@@ -821,9 +852,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                         {role}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs text-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
-                          {msg.content.length > 2000 ? msg.content.slice(0, 2000) + '…' : msg.content}
-                        </div>
+                        <MessageContent text={msg.content} />
                         {msg.ts && (
                           <div className="text-[10px] text-muted-foreground/50 mt-1">{formatTime(msg.ts)}</div>
                         )}

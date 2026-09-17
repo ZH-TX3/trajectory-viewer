@@ -150,16 +150,23 @@ pub fn delete_file_backed_session(provider_id: &str, path: &Path) -> Result<Stri
         return Err("Refusing to delete non-session file".to_string());
     }
 
-    let session_id = path
-        .file_stem()
+    // Prefer the parsed metadata so the trash list shows the real conversation
+    // title instead of the file name (a uuid/hash for Claude). Fall back to the
+    // file name only when the file can't be parsed (e.g. a partial write).
+    let metadata = provider.parse_session(path);
+    let fallback = path
+        .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("session")
         .to_string();
-    let title = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(&session_id)
-        .to_string();
+    let session_id = metadata
+        .as_ref()
+        .map(|m| m.session_id.clone())
+        .unwrap_or_else(|| fallback.clone());
+    let title = metadata
+        .as_ref()
+        .and_then(|m| m.title.clone())
+        .unwrap_or(fallback);
 
     utils::trash_file_session(provider_id, &session_id, &title, path)
 }
@@ -249,6 +256,45 @@ mod tests {
     fn load_messages_rejects_an_unknown_provider() {
         let err = load_messages("nope", "/tmp/x").unwrap_err();
         assert!(err.contains("Unsupported provider"), "got: {err}");
+    }
+
+    #[test]
+    fn delete_trashes_with_the_parsed_title_not_the_file_name() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        with_home(&home, || {
+            let file = home.join(".claude/projects/proj/abc-123.jsonl");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(
+                &file,
+                concat!(
+                    r#"{"sessionId":"abc-123","timestamp":"2026-03-06T10:00:00Z"}"#,
+                    "\n",
+                    r#"{"type":"custom-title","customTitle":"Refactor the parser"}"#,
+                ),
+            )
+            .unwrap();
+
+            let id = delete_file_backed_session("claude", &file).unwrap();
+            let manifest = crate::trash::read_manifest(&id).expect("manifest exists");
+            assert_eq!(manifest.title, "Refactor the parser");
+            assert_eq!(manifest.session_id, "abc-123");
+        });
+    }
+
+    #[test]
+    fn delete_falls_back_to_the_file_name_when_unparseable() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        with_home(&home, || {
+            let file = home.join(".claude/projects/proj/xyz.jsonl");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, b"definitely-not-json\n").unwrap();
+
+            let id = delete_file_backed_session("claude", &file).unwrap();
+            let manifest = crate::trash::read_manifest(&id).expect("manifest exists");
+            assert_eq!(manifest.title, "xyz.jsonl");
+        });
     }
 
     #[test]

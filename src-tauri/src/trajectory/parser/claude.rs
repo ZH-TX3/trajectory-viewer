@@ -373,6 +373,7 @@ fn push_assistant_events(
     let message = &json["message"];
     let assistant_step = *current_step;
     let mut text_parts: Vec<String> = Vec::new();
+    let mut thinking_parts: Vec<String> = Vec::new();
     let mut saw_tool_use = false;
 
     if let Some(items) = message["content"].as_array() {
@@ -430,6 +431,18 @@ fn push_assistant_events(
                     model: None,
                     provider: Some("claude".to_string()),
                 });
+            } else if item_type == "thinking" || item_type == "reasoning" {
+                // Reasoning text lives under `thinking` (or `reasoning`), not
+                // `text`. Kept apart from the message body so it can be shown
+                // as its own tab.
+                let text = item["thinking"]
+                    .as_str()
+                    .or_else(|| item["reasoning"].as_str())
+                    .or_else(|| item["text"].as_str())
+                    .unwrap_or("");
+                if !text.trim().is_empty() {
+                    thinking_parts.push(text.to_string());
+                }
             } else {
                 let text = item["text"]
                     .as_str()
@@ -447,7 +460,9 @@ fn push_assistant_events(
         }
     }
 
-    if !text_parts.is_empty() {
+    // A message that only reasons is still a real assistant record; emitting it
+    // only when `text_parts` was non-empty dropped those messages entirely.
+    if !text_parts.is_empty() || !thinking_parts.is_empty() {
         *seq += 1;
         let content = text_parts.join("\n");
         let model = json["model"]
@@ -546,11 +561,23 @@ fn extract_content_blocks(msg: &Value) -> Vec<ContentBlock> {
         return blocks;
     }
 
+    // Callers pass the whole `message` object, whose blocks live under
+    // `content`; delegate so a message-shaped value still yields its blocks.
+    if msg.is_object() {
+        return msg
+            .get("content")
+            .map(extract_content_blocks)
+            .unwrap_or_default();
+    }
+
     if let Some(arr) = msg.as_array() {
         for item in arr {
             let block_type = item["type"].as_str().unwrap_or("text").to_string();
+            // Thinking blocks carry their text under `thinking`, not `text`.
             let text = item["text"]
                 .as_str()
+                .or_else(|| item["thinking"].as_str())
+                .or_else(|| item["reasoning"].as_str())
                 .or_else(|| item["content"].as_str())
                 .map(|s| s.to_string());
             let tool_call_id = item["id"]
@@ -663,6 +690,34 @@ mod tests {
         assert_eq!(events[1].event_type, "assistant-message");
         assert_eq!(events[0].turn, Some(1));
         assert_eq!(events[1].turn, Some(1));
+    }
+
+    // Real transcripts put thinking text under `thinking`, not `text`; reading
+    // only `text` silently dropped every reasoning block.
+    #[test]
+    fn parse_thinking_block_text() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-t\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"weighing options\",\"signature\":\"sig\"},{\"type\":\"text\",\"text\":\"answer\"}]},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        let assistant = events
+            .iter()
+            .find(|e| e.event_type == "assistant-message")
+            .expect("assistant event");
+        let blocks = assistant.content_blocks.as_ref().unwrap();
+        let thinking = blocks
+            .iter()
+            .find(|b| b.block_type == "thinking")
+            .expect("thinking block");
+        assert_eq!(thinking.text.as_deref(), Some("weighing options"));
     }
 
     #[test]

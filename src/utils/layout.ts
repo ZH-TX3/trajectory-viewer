@@ -254,12 +254,28 @@ function subagentInfo(toolArgs: string | null | undefined): SubagentInfo {
   };
 }
 
+/**
+ * Concatenate the reasoning/thinking text of an assistant message. Providers
+ * name these blocks differently (`reasoning`, `thinking`), and some carry the
+ * text under `content` instead of `text`.
+ */
+function reasoningText(event: TrajectoryEvent): string | undefined {
+  const blocks = event.contentBlocks;
+  if (blocks == null || blocks.length === 0) return undefined;
+  const parts = blocks
+    .filter((block) => block.blockType === 'reasoning' || block.blockType === 'thinking')
+    .map((block) => block.text ?? '')
+    .filter((text) => text !== '');
+  return parts.length === 0 ? undefined : parts.join('\n\n');
+}
+
 function eventToCell(
   event: TrajectoryEvent,
   index: number,
 ): TrajectoryCellProps | null {
   const timeSeconds = event.durationMs != null ? event.durationMs / 1000 : null;
   const subagent = isSubagentTool(event.toolName) ? subagentInfo(event.toolArgs) : null;
+  const reasoning = reasoningText(event);
 
   switch (event.eventType) {
     case 'user-message':
@@ -305,8 +321,11 @@ function eventToCell(
         cacheRead: event.cacheReadTokens ?? undefined,
         cacheWrite: event.cacheWriteTokens ?? undefined,
         kind: 'message',
-        text: truncateContent(event.content, 120),
-        previewMarkdown: event.content,
+        // A reasoning-only message has no body text; fall back to the reasoning
+        // so the row shows its content instead of an empty placeholder.
+        text: truncateContent(event.content ?? reasoning, 120),
+        previewMarkdown: event.content ?? reasoning,
+        thinkingDetail: reasoning,
         sourceBlocks: contentBlocksToSourceBlocks(event.contentBlocks ?? undefined),
         assistantMetrics: event.ttftMs != null ? {
           timingRecorded: true,

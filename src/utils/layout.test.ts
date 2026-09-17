@@ -281,6 +281,56 @@ describe('subagent dispatch cells', () => {
   });
 });
 
+describe('assistant reasoning', () => {
+  function cellsOf(events: TrajectoryEvent[]) {
+    return deriveTrajectoryLayout(events).flatMap((t) => t.groups.flatMap((g) => g.cells));
+  }
+
+  function assistantWith(blocks: Array<{ blockType: string; text: string | null }>) {
+    return event({
+      seq: 1,
+      eventType: 'assistant-message',
+      content: 'answer',
+      contentBlocks: blocks.map((b) => ({
+        blockType: b.blockType,
+        text: b.text,
+        toolCallId: null,
+        toolName: null,
+        toolArgs: null,
+        imageSrc: null,
+      })),
+    });
+  }
+
+  it('collects thinking blocks into thinkingDetail', () => {
+    const [cell] = cellsOf([assistantWith([
+      { blockType: 'thinking', text: 'weighing options' },
+      { blockType: 'text', text: 'answer' },
+    ])]);
+    expect(cell.thinkingDetail).toBe('weighing options');
+  });
+
+  it('accepts the reasoning block name too', () => {
+    const [cell] = cellsOf([assistantWith([
+      { blockType: 'reasoning', text: 'step by step' },
+    ])]);
+    expect(cell.thinkingDetail).toBe('step by step');
+  });
+
+  it('joins multiple reasoning blocks', () => {
+    const [cell] = cellsOf([assistantWith([
+      { blockType: 'thinking', text: 'first' },
+      { blockType: 'thinking', text: 'second' },
+    ])]);
+    expect(cell.thinkingDetail).toBe('first\n\nsecond');
+  });
+
+  it('leaves thinkingDetail unset without reasoning blocks', () => {
+    const [cell] = cellsOf([assistantWith([{ blockType: 'text', text: 'answer' }])]);
+    expect(cell.thinkingDetail).toBeUndefined();
+  });
+});
+
 describe('tool result merging', () => {
   function cellsOf(events: TrajectoryEvent[]) {
     return deriveTrajectoryLayout(events).flatMap((t) => t.groups.flatMap((g) => g.cells));

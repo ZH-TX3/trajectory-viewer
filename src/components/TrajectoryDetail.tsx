@@ -43,6 +43,7 @@ type TabId =
   | 'timing'
   | 'rendered'
   | 'raw'
+  | 'thinking'
   | 'result'
   | 'schema';
 
@@ -109,6 +110,9 @@ function detailTabs(
       return [
         { id: 'overview', label: 'Summary' },
         ...(hasPreview(cell) ? [{ id: 'rendered', label: 'Preview' } as TabDef] : []),
+        ...(cell.thinkingDetail !== undefined
+          ? [{ id: 'thinking', label: 'Thinking' } as TabDef]
+          : []),
         { id: 'raw', label: 'Raw' },
       ];
     default: // tool / subtool
@@ -320,6 +324,15 @@ function SummaryTab({
         </OverviewSection>
       )}
 
+      {/* Reasoning preview for an assistant message */}
+      {cell.thinkingDetail !== undefined && (
+        <OverviewSection label="Thinking" onOpen={() => onTabChange('thinking')}>
+          <pre className="text-[10px] font-mono text-foreground/70 whitespace-pre-wrap break-words leading-relaxed max-h-32 overflow-auto">
+            {cell.thinkingDetail}
+          </pre>
+        </OverviewSection>
+      )}
+
       {/* Result preview — shown for a tool record whether it opens standalone
           or inside an aggregated request. */}
       {isToolRecord(cell) && (cell.result ?? cell.outputDetail) !== undefined && (
@@ -454,6 +467,11 @@ export function TrajectoryDetail({ cell, request, onClose, detailWidth, onWidthC
         {active === 'raw' && (
           <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all leading-relaxed">
             {safeJsonFormat(cell.outputDetail ?? cell.inputDetail ?? cell.text)}
+          </pre>
+        )}
+        {active === 'thinking' && (
+          <pre className="text-[10px] font-mono text-foreground/70 whitespace-pre-wrap break-words leading-relaxed">
+            {cell.thinkingDetail ?? '(no reasoning)'}
           </pre>
         )}
         {active === 'result' && (

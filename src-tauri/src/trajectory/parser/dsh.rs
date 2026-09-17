@@ -806,36 +806,3 @@ mod tests {
         assert_eq!(events[1].content.as_deref(), Some("Hi!"));
     }
 }
-
-#[cfg(test)]
-mod probe_dupe {
-    use super::*;
-    #[test]
-    #[ignore]
-    fn probe_counts() {
-        let dir = std::env::var("PROBE_DIR").unwrap();
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        let mut stack = vec![dir];
-        while let Some(d) = stack.pop() {
-            if let Ok(rd) = std::fs::read_dir(&d) {
-                for e in rd.flatten() {
-                    let p = e.path();
-                    if p.is_dir() { stack.push(p.to_str().unwrap().to_string()); }
-                    else if p.to_string_lossy().ends_with(".zstd") { files.push(p); }
-                }
-            }
-        }
-        for f in files.iter().take(2) {
-            let Ok((_, events)) = parse_trajectory(f) else { continue };
-            let calls: Vec<_> = events.iter().filter(|e| e.event_type=="tool-call").collect();
-            let results: Vec<_> = events.iter().filter(|e| e.event_type=="tool-result").collect();
-            println!("FILE {:?} events={} calls={} results={}", f.file_name().unwrap(), events.len(), calls.len(), results.len());
-            for (i,c) in calls.iter().enumerate().take(3) {
-                println!("  call[{}] id={:?} name={:?}", i, c.tool_call_id, c.tool_name);
-            }
-            for (i,r) in results.iter().enumerate().take(3) {
-                println!("  result[{}] id={:?} name={:?} len={}", i, r.tool_call_id, r.tool_name, r.tool_result.as_deref().map(|s| s.len()).unwrap_or(0));
-            }
-        }
-    }
-}

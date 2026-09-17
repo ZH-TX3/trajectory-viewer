@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicksenger/tauri/refs/heads/dev/crates/tauri-config-schema/schema.json",
   "productName": "Trajectory Viewer",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "identifier": "com.trajectory-viewer.app",
   "build": {
     "frontendDist": "../dist",

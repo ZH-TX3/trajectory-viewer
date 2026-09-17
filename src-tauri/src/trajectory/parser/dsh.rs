@@ -348,18 +348,38 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     current_step = step as usize;
                 }
 
-                let call_id = message["source"]["callId"].as_str().map(|s| s.to_string());
+                let call_id = message["source"]["callId"]
+                    .as_str()
+                    .or_else(|| message["content"][0]["toolCallId"].as_str())
+                    .map(|s| s.to_string());
 
+                // A DSH result block nests its text one level down:
+                //   content: [{ type: "tool-result", content: [{ type: "text", text }] }]
+                // Older/simpler shapes put `text` directly on the outer item, so
+                // accept both.
                 let tool_result = if let Some(content) = message["content"].as_array() {
                     Some(
                         content
                             .iter()
                             .filter_map(|item| {
-                                if item["type"].as_str() == Some("text") {
-                                    item["text"].as_str().map(|s| s.to_string())
-                                } else {
-                                    None
+                                if let Some(text) = item["text"].as_str() {
+                                    return Some(text.to_string());
                                 }
+                                item["content"]
+                                    .as_array()
+                                    .map(|inner| {
+                                        inner
+                                            .iter()
+                                            .filter_map(|part| {
+                                                (part["type"].as_str() == Some("text"))
+                                                    .then(|| part["text"].as_str())
+                                                    .flatten()
+                                                    .map(|s| s.to_string())
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    })
+                                    .filter(|s| !s.is_empty())
                             })
                             .collect::<Vec<_>>()
                             .join("\n"),
@@ -675,6 +695,36 @@ mod tests {
             .contains("file1.txt"));
     }
 
+    // Regression: real DSH transcripts nest the result text one level down
+    // (content[].content[].text). The parser only read the outer `text`, so
+    // every DSH tool result came back empty.
+    #[test]
+    fn parse_dsh_tool_result_nested_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl.zstd");
+
+        create_dsh_session(
+            &path,
+            &[
+                r#"{"type":"session","id":"sess-3","createdAt":1787023345223,"cwd":"/tmp"}"#,
+                r#"{"type":"tool/call","seq":1,"time":1787023347001,"data":{"turn":1,"step":1,"callId":"call_1","name":"pwsh","arguments":"{\"command\":\"df -h\"}"}}"#,
+                r#"{"type":"tool/result","seq":2,"time":1787023348000,"data":{"turn":1,"step":1,"message":{"role":"user","source":{"kind":"tool","callId":"call_1"},"content":[{"type":"tool-result","toolCallId":"call_1","isError":false,"content":[{"type":"text","text":"Filesystem Size Used Avail"}]}]}}}"#,
+            ],
+        );
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        let result = events
+            .iter()
+            .find(|e| e.event_type == "tool-result")
+            .expect("tool-result event");
+        assert_eq!(
+            result.tool_result.as_deref(),
+            Some("Filesystem Size Used Avail")
+        );
+        assert_eq!(result.tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(result.tool_name.as_deref(), Some("pwsh"));
+    }
+
     #[test]
     fn parse_dsh_chunk_usage_and_timing() {
         let dir = tempdir().unwrap();
@@ -754,5 +804,38 @@ mod tests {
         assert_eq!(events[0].event_type, "user-message");
         assert_eq!(events[1].event_type, "assistant-message");
         assert_eq!(events[1].content.as_deref(), Some("Hi!"));
+    }
+}
+
+#[cfg(test)]
+mod probe_dupe {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn probe_counts() {
+        let dir = std::env::var("PROBE_DIR").unwrap();
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        let mut stack = vec![dir];
+        while let Some(d) = stack.pop() {
+            if let Ok(rd) = std::fs::read_dir(&d) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() { stack.push(p.to_str().unwrap().to_string()); }
+                    else if p.to_string_lossy().ends_with(".zstd") { files.push(p); }
+                }
+            }
+        }
+        for f in files.iter().take(2) {
+            let Ok((_, events)) = parse_trajectory(f) else { continue };
+            let calls: Vec<_> = events.iter().filter(|e| e.event_type=="tool-call").collect();
+            let results: Vec<_> = events.iter().filter(|e| e.event_type=="tool-result").collect();
+            println!("FILE {:?} events={} calls={} results={}", f.file_name().unwrap(), events.len(), calls.len(), results.len());
+            for (i,c) in calls.iter().enumerate().take(3) {
+                println!("  call[{}] id={:?} name={:?}", i, c.tool_call_id, c.tool_name);
+            }
+            for (i,r) in results.iter().enumerate().take(3) {
+                println!("  result[{}] id={:?} name={:?} len={}", i, r.tool_call_id, r.tool_name, r.tool_result.as_deref().map(|s| s.len()).unwrap_or(0));
+            }
+        }
     }
 }

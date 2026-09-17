@@ -120,9 +120,16 @@ export function TrajectoryTimeline({
     moved: boolean;
     pannable: boolean;
   } | null>(null);
+  const thumbRef = useRef<{
+    pointerId: number;
+    grabOffset: number; // clientX where the thumb was grabbed
+    start: number; // viewport start at grab time, for ESC-restore
+    duration: number; // viewport duration at grab time, for ESC-restore
+  } | null>(null);
   const [draft, setDraft] = useState<Range | null>(null);
   const [hover, setHover] = useState<{ fraction: number; recordIndex: number | null } | null>(null);
   const [panning, setPanning] = useState(false);
+  const [thumbDragging, setThumbDragging] = useState(false);
   const [viewport, setViewport] = useState<Range | null>(null);
 
   // When the model is replaced (e.g. duration mode switched), drop a stale
@@ -147,7 +154,8 @@ export function TrajectoryTimeline({
   const domainStart = viewport === null ? model?.start ?? 0 : viewportStart;
   const domainDuration = viewport === null ? fullDuration : viewportDuration;
 
-  // Wheel zooms the viewport anchored at the cursor.
+  // Wheel: vertical scroll zooms anchored at the cursor; horizontal scroll
+  // (trackpad deltaX, or Shift+wheel on a mouse) pans the zoomed viewport.
   useEffect(() => {
     const root = rootRef.current;
     if (root === null || model === null) return;
@@ -156,6 +164,23 @@ export function TrajectoryTimeline({
       const track = trackRef.current;
       if (track === null) return;
       const rect = track.getBoundingClientRect();
+
+      // Horizontal axis moves the viewport without changing the zoom level.
+      // Some mice route Shift+wheel through deltaY; treat that as horizontal.
+      const horizontalDelta =
+        event.deltaX !== 0 ? event.deltaX : event.shiftKey ? event.deltaY : 0;
+      if (horizontalDelta !== 0) {
+        // Fully zoomed out there is nothing to pan.
+        if (viewport === null) return;
+        const panUnits = (horizontalDelta * domainDuration) / Math.max(1, rect.width);
+        const nextStart = Math.min(
+          Math.max(domainStart + panUnits, model.start),
+          model.end - domainDuration,
+        );
+        setViewport({ start: nextStart, end: nextStart + domainDuration });
+        return;
+      }
+
       const anchorFraction = clampFraction((event.clientX - rect.left) / Math.max(1, rect.width));
       const nextDuration = Math.min(
         fullDuration,
@@ -177,7 +202,17 @@ export function TrajectoryTimeline({
     };
     root.addEventListener('wheel', onWheel, { passive: false });
     return () => root.removeEventListener('wheel', onWheel);
-  }, [model, mode, fullDuration, domainStart, domainDuration]);
+  }, [model, mode, fullDuration, domainStart, domainDuration, viewport]);
+
+  // A visible "zoom window" thumb: shows where the current viewport sits in the
+  // full timeline, and dragging it pans. Appears only once zoomed in.
+  const viewportThumb = useMemo(() => {
+    if (model === null || viewport === null) return null;
+    const full = Math.max(1, model.end - model.start);
+    const left = ((viewport.start - model.start) / full) * 100;
+    const width = ((viewport.end - viewport.start) / full) * 100;
+    return { left: Math.max(0, left), width: Math.min(100 - Math.max(0, left), width) };
+  }, [model, viewport]);
 
   const minimumSelectionDuration = model === null ? 0 : Math.min(domainDuration, fullDuration / Math.max(1, spans.length));
 
@@ -221,6 +256,16 @@ export function TrajectoryTimeline({
     setDraft({ start: anchor, end: anchor });
   };
 
+  /** Thumb drag: grab the zoom-window thumb to pan without changing zoom. */
+  const handleThumbPointerDown = (event: React.PointerEvent) => {
+    if (model === null || viewport === null) return;
+    event.stopPropagation();
+    event.preventDefault();
+    thumbRef.current = { pointerId: event.pointerId, grabOffset: event.clientX, start: viewport.start, duration: domainDuration };
+    setThumbDragging(true);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
   const handlePointerMove = (event: React.PointerEvent) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const fraction = clampFraction(fractionAt(event));
@@ -233,6 +278,18 @@ export function TrajectoryTimeline({
       const delta = (event.clientX - pan.anchorClientX) / Math.max(1, rect.width);
       const nextStart = Math.min(
         Math.max(pan.anchorStart - delta * domainDuration, model?.start ?? 0),
+        (model?.end ?? 0) - domainDuration,
+      );
+      setViewport({ start: nextStart, end: nextStart + domainDuration });
+      return;
+    }
+
+    const thumb = thumbRef.current;
+    if (thumb !== null && thumb.pointerId === event.pointerId) {
+      const full = Math.max(1, (model?.end ?? 0) - (model?.start ?? 0));
+      const deltaFraction = (event.clientX - thumb.grabOffset) / Math.max(1, rect.width);
+      const nextStart = Math.min(
+        Math.max(thumb.start + deltaFraction * full, model?.start ?? 0),
         (model?.end ?? 0) - domainDuration,
       );
       setViewport({ start: nextStart, end: nextStart + domainDuration });
@@ -275,6 +332,13 @@ export function TrajectoryTimeline({
       return;
     }
 
+    const thumb = thumbRef.current;
+    if (thumb !== null && thumb.pointerId === event.pointerId) {
+      thumbRef.current = null;
+      setThumbDragging(false);
+      return;
+    }
+
     const drag = dragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) return;
     const fraction = clampFraction(fractionAt(event));
@@ -307,9 +371,11 @@ export function TrajectoryTimeline({
   const handlePointerCancel = () => {
     dragRef.current = null;
     panRef.current = null;
+    thumbRef.current = null;
     setDraft(null);
     setHover(null);
     setPanning(false);
+    setThumbDragging(false);
   };
 
   const clearRange = () => {
@@ -319,12 +385,29 @@ export function TrajectoryTimeline({
     onRangeChange(null);
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent) => {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape' && range !== null) {
       event.preventDefault();
       onRangeChange(null);
     }
   };
+
+  // ESC while dragging the zoom-window thumb cancels the pan and restores the
+  // viewport to where it was before the drag. Listened on `window` because
+  // mouse-dragging the thumb never puts keyboard focus on the timeline.
+  useEffect(() => {
+    if (!thumbDragging) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || thumbRef.current === null) return;
+      event.preventDefault();
+      const thumb = thumbRef.current;
+      setViewport({ start: thumb.start, end: thumb.start + thumb.duration });
+      thumbRef.current = null;
+      setThumbDragging(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [thumbDragging]);
 
   if (model === null) {
     return (
@@ -476,6 +559,24 @@ export function TrajectoryTimeline({
             );
           })}
         </div>
+
+        {/* Zoom-window thumb — where the current viewport sits in the whole
+            timeline. Draggable to pan; appears only while zoomed in. */}
+        {viewportThumb !== null && viewport !== null && (
+          <div
+            role="slider"
+            aria-label="Zoom window; drag horizontally to pan the timeline"
+            aria-valuemin={model.start}
+            aria-valuemax={model.end}
+            aria-valuenow={Math.round(viewport.start)}
+            className={cn(
+              'absolute top-0 bottom-0 rounded-[2px] border border-blue-500/70 bg-blue-500/15 dark:bg-blue-400/15 z-[6]',
+              thumbDragging ? 'cursor-grabbing' : 'cursor-grab',
+            )}
+            style={{ left: `${viewportThumb.left}%`, width: `${viewportThumb.width}%` }}
+            onPointerDown={handleThumbPointerDown}
+          />
+        )}
 
         {/* Selection overlay — interior fill + dim the outside like DSH */}
         {visibleRange !== null && (

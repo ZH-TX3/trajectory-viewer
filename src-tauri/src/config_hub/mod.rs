@@ -336,7 +336,7 @@ fn spawn_code_path_cli(target: &std::path::Path) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn spawn_code_path_cli(target: &std::path::Path) -> Result<(), String> {
-    spawn_code(Path::new("code"), target)
+    spawn_code(std::path::Path::new("code"), target)
 }
 
 /// Whether a `code` command is actually runnable from PATH.

@@ -220,12 +220,13 @@ describe('subagent dispatch cells', () => {
     return deriveTrajectoryLayout(events).flatMap((t) => t.groups.flatMap((g) => g.cells));
   }
 
-  it('marks an Agent tool-call and its result as subtool', () => {
+  it('merges an Agent call and its result into one subtool record', () => {
     const cells = cellsOf([
       event({ seq: 1, eventType: 'tool-call', toolName: 'Agent', toolArgs: agentArgs, toolCallId: 'c1' }),
       event({ seq: 2, eventType: 'tool-result', toolName: 'Agent', toolResult: 'done', toolCallId: 'c1' }),
     ]);
-    expect(cells.map((c) => c.kind)).toEqual(['subtool', 'subtool']);
+    expect(cells.map((c) => c.kind)).toEqual(['subtool']);
+    expect(cells[0].result).toBe('done');
   });
 
   it('extracts the agent type, description and background flag', () => {
@@ -277,6 +278,48 @@ describe('subagent dispatch cells', () => {
     const request = aggregateRequestDetail(turns, 1);
     expect(request?.subtoolCalls).toBe(1);
     expect(request?.toolCalls).toBe(1);
+  });
+});
+
+describe('tool result merging', () => {
+  function cellsOf(events: TrajectoryEvent[]) {
+    return deriveTrajectoryLayout(events).flatMap((t) => t.groups.flatMap((g) => g.cells));
+  }
+
+  it('folds a tool-result into its call, producing ONE record', () => {
+    const cells = cellsOf([
+      event({ seq: 1, eventType: 'user-message', content: 'go', turn: 1, step: 0 }),
+      event({ seq: 2, eventType: 'tool-call', toolName: 'Bash', toolArgs: '{"command":"ls"}', toolCallId: 'c1', turn: 1, step: 1 }),
+      event({ seq: 3, eventType: 'tool-result', toolName: 'Bash', content: null, toolResult: 'file1\nfile2', toolCallId: 'c1', turn: 1, step: 1 }),
+    ]);
+    const tools = cells.filter((c) => c.kind === 'tool');
+    expect(tools).toHaveLength(1);
+    expect(tools[0].inputDetail).toBe('{"command":"ls"}');
+    expect(tools[0].result).toBe('file1\nfile2');
+  });
+
+  it('keeps the call duration from the result timestamp', () => {
+    const cells = cellsOf([
+      event({ seq: 1, eventType: 'tool-call', toolName: 'Bash', toolArgs: '{}', toolCallId: 'c1', ts: 1000 }),
+      event({ seq: 2, eventType: 'tool-result', toolName: 'Bash', toolResult: 'ok', toolCallId: 'c1', ts: 1500 }),
+    ]);
+    expect(cells[0].timeSeconds).toBe(0.5);
+  });
+
+  it('keeps an orphan tool-result as its own record', () => {
+    const cells = cellsOf([
+      event({ seq: 1, eventType: 'tool-result', toolName: 'Bash', toolResult: 'orphan', toolCallId: 'gone' }),
+    ]);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].result).toBe('orphan');
+  });
+
+  it('leaves tool calls without a matching result untouched', () => {
+    const cells = cellsOf([
+      event({ seq: 1, eventType: 'tool-call', toolName: 'Bash', toolArgs: '{}', toolCallId: 'c1' }),
+    ]);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].result).toBeUndefined();
   });
 });
 
@@ -417,7 +460,7 @@ describe('aggregateRequestDetail', () => {
 
     expect(request).not.toBeNull();
     expect(request!.turn).toBe(1);
-    expect(request!.toolCalls).toBe(2); // call + result cells
+    expect(request!.toolCalls).toBe(1); // one call, its result is folded in
     expect(request!.usage?.input).toBe(100);
     expect(request!.usage?.output).toBe(20);
     expect(request!.state).toBe('complete');

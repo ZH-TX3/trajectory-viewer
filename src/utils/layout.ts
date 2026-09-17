@@ -125,6 +125,47 @@ function withDerivedTurnStep(events: readonly TrajectoryEvent[]): TrajectoryEven
   });
 }
 
+/**
+ * Fold each tool-result into the tool-call it answers, keyed by call id.
+ *
+ * One tool invocation is ONE record in the trajectory: the result belongs on
+ * the call that produced it, not on a second row. Results whose call never
+ * appeared (a truncated transcript) are kept as standalone events so nothing
+ * is silently dropped.
+ */
+function mergeToolResults(events: readonly TrajectoryEvent[]): TrajectoryEvent[] {
+  const resultsByCall = new Map<string, TrajectoryEvent>();
+  for (const event of events) {
+    if (event.eventType !== 'tool-result' || event.toolCallId == null) continue;
+    if (!resultsByCall.has(event.toolCallId)) resultsByCall.set(event.toolCallId, event);
+  }
+  if (resultsByCall.size === 0) return [...events];
+
+  const consumed = new Set<string>();
+  const merged: TrajectoryEvent[] = [];
+  for (const event of events) {
+    if (event.eventType === 'tool-call' && event.toolCallId != null) {
+      const result = resultsByCall.get(event.toolCallId);
+      if (result !== undefined) {
+        consumed.add(event.toolCallId);
+        merged.push({
+          ...event,
+          toolResult: result.toolResult,
+          isError: event.isError ?? result.isError,
+          // The result's timestamp bounds the call's duration.
+          durationMs: event.durationMs ?? Math.max(0, result.ts - event.ts),
+        });
+        continue;
+      }
+    }
+    if (event.eventType === 'tool-result' && event.toolCallId != null && consumed.has(event.toolCallId)) {
+      continue; // absorbed into its call
+    }
+    merged.push(event);
+  }
+  return merged;
+}
+
 // ── Layout derivation ─────────────────────────────────────────────────────
 
 /**
@@ -137,7 +178,7 @@ export function deriveTrajectoryLayout(
   const standaloneCells: TrajectoryCellProps[] = [];
   let cellIndex = 0;
 
-  for (const event of withDerivedTurnStep(events)) {
+  for (const event of withDerivedTurnStep(mergeToolResults(events))) {
     const cell = eventToCell(event, cellIndex);
     if (!cell) continue;
     cell.turn = event.turn;
@@ -295,6 +336,9 @@ function eventToCell(
         kind: subagent !== null ? 'subtool' : 'tool',
         text: subagent !== null ? subagentCellText(subagent, event.toolName) : (event.toolName ?? 'Tool call'),
         inputDetail: event.toolArgs,
+        // The paired result is folded onto the call (see mergeToolResults).
+        result: event.toolResult ?? undefined,
+        resultPreviewMarkdown: event.toolResult ?? undefined,
         subagentType: subagent?.type,
         subagentDescription: subagent?.description,
         subagentBackground: subagent?.background,

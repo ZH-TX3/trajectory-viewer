@@ -19,6 +19,14 @@ import {
   KIND_LABEL,
 } from '../utils/format';
 import { cn } from '../lib/utils';
+import {
+  formatCodeBlock,
+  JSON_KEY_COLOR,
+  JSON_VALUE_COLOR,
+  parseInline,
+  parseMarkdownBlocks,
+  tokenizeJson,
+} from '../utils/markdown';
 import { X, ChevronRight } from 'lucide-react';
 
 interface TrajectoryDetailProps {
@@ -35,7 +43,6 @@ type TabId =
   | 'timing'
   | 'rendered'
   | 'raw'
-  | 'payload'
   | 'result'
   | 'schema';
 
@@ -69,9 +76,18 @@ function detailTabs(
   request: TrajectoryRequestDetail | null,
 ): TabDef[] {
   if (request !== null) {
+    // Aggregated request view. A tool row inside the request still exposes its
+    // own Result / Schema — those must not be lost to the aggregate.
+    const isTool = isToolRecord(cell);
     return [
       { id: 'overview', label: 'Summary' },
       ...(hasPreview(cell) ? [{ id: 'rendered', label: 'Preview' } as TabDef] : []),
+      ...(isTool && (cell.result ?? cell.outputDetail)
+        ? [{ id: 'result', label: 'Result' } as TabDef]
+        : []),
+      ...(isTool && cell.schemaDetail !== undefined
+        ? [{ id: 'schema', label: 'Schema' } as TabDef]
+        : []),
       ...(request.usage !== undefined ? [{ id: 'usage', label: 'Usage' } as TabDef] : []),
       ...(request.assistant !== undefined ? [{ id: 'timing', label: 'Timing' } as TabDef] : []),
     ];
@@ -99,9 +115,6 @@ function detailTabs(
       return [
         { id: 'overview', label: 'Summary' },
         ...(hasPreview(cell) ? [{ id: 'rendered', label: 'Preview' } as TabDef] : []),
-        ...(cell.inputDetail !== undefined
-          ? [{ id: 'payload', label: 'Payload' } as TabDef]
-          : []),
         ...(cell.result ?? cell.outputDetail
           ? [{ id: 'result', label: 'Result' } as TabDef]
           : []),
@@ -115,6 +128,10 @@ function detailTabs(
 
 function stateLabel(state: 'complete' | 'error'): string {
   return state === 'error' ? 'Error' : 'Complete';
+}
+
+function isToolRecord(cell: TrajectoryCellProps): boolean {
+  return cell.kind === 'tool' || cell.kind === 'subtool';
 }
 
 function OverviewSection({
@@ -297,17 +314,18 @@ function SummaryTab({
           label="Preview"
           onOpen={previewOpens ? () => onTabChange('rendered') : undefined}
         >
-          <pre className="text-[10px] font-mono text-foreground/70 whitespace-pre-wrap break-all leading-relaxed max-h-40 overflow-auto">
-            {contentPreview}
-          </pre>
+          <div className="max-h-40 overflow-auto">
+            <MarkdownPreview text={contentPreview} />
+          </div>
         </OverviewSection>
       )}
 
-      {/* Payload preview for tool records */}
-      {!isRequest && cell.inputDetail !== undefined && (
-        <OverviewSection label="Payload" onOpen={() => onTabChange('payload')}>
+      {/* Result preview — shown for a tool record whether it opens standalone
+          or inside an aggregated request. */}
+      {isToolRecord(cell) && (cell.result ?? cell.outputDetail) !== undefined && (
+        <OverviewSection label="Result" onOpen={() => onTabChange('result')}>
           <pre className="text-[10px] font-mono text-foreground/70 whitespace-pre-wrap break-all leading-relaxed max-h-32 overflow-auto">
-            {cell.inputDetail}
+            {cell.result ?? cell.outputDetail}
           </pre>
         </OverviewSection>
       )}
@@ -431,18 +449,11 @@ export function TrajectoryDetail({ cell, request, onClose, detailWidth, onWidthC
           <TimingTab cell={request?.assistant ?? cell} />
         )}
         {active === 'rendered' && (
-          <pre className="text-[10px] font-mono text-foreground/70 whitespace-pre-wrap break-all leading-relaxed">
-            {previewContent(cell) || '(no content)'}
-          </pre>
+          <MarkdownPreview text={previewContent(cell)} />
         )}
         {active === 'raw' && (
           <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all leading-relaxed">
             {safeJsonFormat(cell.outputDetail ?? cell.inputDetail ?? cell.text)}
-          </pre>
-        )}
-        {active === 'payload' && (
-          <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all leading-relaxed">
-            {safeJsonFormat(cell.inputDetail ?? '(no payload)')}
           </pre>
         )}
         {active === 'result' && (
@@ -462,6 +473,63 @@ export function TrajectoryDetail({ cell, request, onClose, detailWidth, onWidthC
 
 function TimingTab({ cell }: { cell: TrajectoryCellProps }) {
   return <TimingPanel cell={cell} />;
+}
+
+/** One code block, with JSON keys and values tinted apart. */
+function CodeBlock({ lang, content }: { lang: string; content: string }) {
+  const body = formatCodeBlock(lang, content);
+  return (
+    <pre className="text-[10px] font-mono whitespace-pre-wrap break-all leading-relaxed bg-muted/50 rounded p-2 overflow-auto">
+      {lang === 'json'
+        ? tokenizeJson(body).map((token, i) => (
+            <span
+              key={i}
+              style={
+                token.kind === 'key'
+                  ? { color: JSON_KEY_COLOR }
+                  : token.kind === 'value'
+                    ? { color: JSON_VALUE_COLOR }
+                    : undefined
+              }
+              className={token.kind === 'plain' ? 'text-foreground/70' : undefined}
+            >
+              {token.text}
+            </span>
+          ))
+        : <span className="text-foreground/80">{body}</span>}
+    </pre>
+  );
+}
+
+/**
+ * Render the Markdown-ish preview the trajectory produces (`**Tool**` + a
+ * fenced code block). JSON bodies are pretty-printed so a one-line argument
+ * object reads as indented JSON instead of a wall of text.
+ */
+function MarkdownPreview({ text }: { text: string }) {
+  const blocks = parseMarkdownBlocks(text);
+  if (blocks.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {blocks.map((block, i) =>
+        block.type === 'code' ? (
+          <CodeBlock key={i} lang={block.lang} content={block.content} />
+        ) : (
+          <p key={i} className="text-xs text-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
+            {parseInline(block.content).map((seg, j) =>
+              seg.bold ? (
+                <span key={j} className="font-medium text-foreground">
+                  {seg.text}
+                </span>
+              ) : (
+                <span key={j}>{seg.text}</span>
+              ),
+            )}
+          </p>
+        ),
+      )}
+    </div>
+  );
 }
 
 function safeJsonFormat(text: string): string {

@@ -43,7 +43,6 @@ type TabId =
   | 'timing'
   | 'rendered'
   | 'raw'
-  | 'thinking'
   | 'result'
   | 'schema';
 
@@ -110,9 +109,6 @@ function detailTabs(
       return [
         { id: 'overview', label: 'Summary' },
         ...(hasPreview(cell) ? [{ id: 'rendered', label: 'Preview' } as TabDef] : []),
-        ...(cell.thinkingDetail !== undefined
-          ? [{ id: 'thinking', label: 'Thinking' } as TabDef]
-          : []),
         { id: 'raw', label: 'Raw' },
       ];
     default: // tool / subtool
@@ -319,17 +315,12 @@ function SummaryTab({
           onOpen={previewOpens ? () => onTabChange('rendered') : undefined}
         >
           <div className="max-h-40 overflow-auto">
-            <MarkdownPreview text={contentPreview} />
+            {cell.kind === 'message' ? (
+              <MessagePreview cell={cell} />
+            ) : (
+              <MarkdownPreview text={contentPreview} />
+            )}
           </div>
-        </OverviewSection>
-      )}
-
-      {/* Reasoning preview for an assistant message */}
-      {cell.thinkingDetail !== undefined && (
-        <OverviewSection label="Thinking" onOpen={() => onTabChange('thinking')}>
-          <pre className="text-[10px] font-mono text-foreground/70 whitespace-pre-wrap break-words leading-relaxed max-h-32 overflow-auto">
-            {cell.thinkingDetail}
-          </pre>
         </OverviewSection>
       )}
 
@@ -354,6 +345,20 @@ function SummaryTab({
           <TimingPanel cell={request.assistant} />
         </OverviewSection>
       )}
+    </div>
+  );
+}
+
+/**
+ * Message preview: the reasoning as a collapsible sub-block, then the body.
+ * The reasoning is part of the preview rather than a separate tab.
+ */
+function MessagePreview({ cell }: { cell: TrajectoryCellProps }) {
+  const body = cell.previewMarkdown ?? '';
+  return (
+    <div className="space-y-2">
+      {cell.thinkingDetail !== undefined && <ThinkingBlock text={cell.thinkingDetail} />}
+      {body !== '' && <MarkdownPreview text={body} />}
     </div>
   );
 }
@@ -462,16 +467,15 @@ export function TrajectoryDetail({ cell, request, onClose, detailWidth, onWidthC
           <TimingTab cell={request?.assistant ?? cell} />
         )}
         {active === 'rendered' && (
-          <MarkdownPreview text={previewContent(cell)} />
+          cell.kind === 'message' ? (
+            <MessagePreview cell={cell} />
+          ) : (
+            <MarkdownPreview text={previewContent(cell)} />
+          )
         )}
         {active === 'raw' && (
           <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all leading-relaxed">
             {safeJsonFormat(cell.outputDetail ?? cell.inputDetail ?? cell.text)}
-          </pre>
-        )}
-        {active === 'thinking' && (
-          <pre className="text-[10px] font-mono text-foreground/70 whitespace-pre-wrap break-words leading-relaxed">
-            {cell.thinkingDetail ?? '(no reasoning)'}
           </pre>
         )}
         {active === 'result' && (
@@ -516,6 +520,31 @@ function CodeBlock({ lang, content }: { lang: string; content: string }) {
           ))
         : <span className="text-foreground/80">{body}</span>}
     </pre>
+  );
+}
+
+/** A collapsible "Thinking" sub-block shown inside the preview, above the body.
+ *  Mirrors the reference layout: the reasoning folds away by default and the
+ *  message body stays visible underneath it. */
+function ThinkingBlock({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="border-l-2 border-border/50 pl-2">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+      >
+        Thinking
+        <ChevronRight className={cn('size-3 transition-transform', expanded && 'rotate-90')} />
+      </button>
+      {expanded && (
+        <pre className="mt-1 text-[10px] font-mono text-foreground/60 whitespace-pre-wrap break-words leading-relaxed">
+          {text}
+        </pre>
+      )}
+    </div>
   );
 }
 

@@ -287,10 +287,16 @@ describe('assistant reasoning', () => {
   }
 
   function assistantWith(blocks: Array<{ blockType: string; text: string | null }>) {
+    // Mirror the parser: the body is the concatenated text blocks (empty for a
+    // reasoning-only message).
+    const body = blocks
+      .filter((b) => b.blockType === 'text')
+      .map((b) => b.text ?? '')
+      .join('\n');
     return event({
       seq: 1,
       eventType: 'assistant-message',
-      content: 'answer',
+      content: body,
       contentBlocks: blocks.map((b) => ({
         blockType: b.blockType,
         text: b.text,
@@ -328,6 +334,35 @@ describe('assistant reasoning', () => {
   it('leaves thinkingDetail unset without reasoning blocks', () => {
     const [cell] = cellsOf([assistantWith([{ blockType: 'text', text: 'answer' }])]);
     expect(cell.thinkingDetail).toBeUndefined();
+  });
+
+  // The parser emits "" (not null) for a reasoning-only message, so a nullish
+  // check is not enough — the row showed as an empty "ASSISTANT (empty)".
+  it('previews the reasoning when the body is an empty string', () => {
+    const [cell] = cellsOf([
+      event({
+        seq: 1,
+        eventType: 'assistant-message',
+        content: '',
+        contentBlocks: [
+          { blockType: 'thinking', text: 'weighing options', toolCallId: null, toolName: null, toolArgs: null, imageSrc: null },
+        ],
+      }),
+    ]);
+    expect(cell.text).toBe('weighing options');
+    expect(cell.previewMarkdown).toBe('weighing options');
+    expect(cell.thinkingDetail).toBe('weighing options');
+  });
+
+  it('keeps the body in the preview and the reasoning separate', () => {
+    const [cell] = cellsOf([assistantWith([
+      { blockType: 'thinking', text: 'weighing options' },
+      { blockType: 'text', text: 'the answer' },
+    ])]);
+    // The preview is the body; reasoning is its own block (rendered as a
+    // collapsible sub-section of the preview, not merged into the text).
+    expect(cell.previewMarkdown).toBe('the answer');
+    expect(cell.thinkingDetail).toBe('weighing options');
   });
 });
 

@@ -276,6 +276,12 @@ function eventToCell(
   const timeSeconds = event.durationMs != null ? event.durationMs / 1000 : null;
   const subagent = isSubagentTool(event.toolName) ? subagentInfo(event.toolArgs) : null;
   const reasoning = reasoningText(event);
+  // A reasoning-only assistant message carries an empty (not null) body, so an
+  // empty string must count as absent — `??` alone would not catch it. When
+  // there is no body the row previews the reasoning, which is otherwise shown
+  // as its own collapsible block inside the preview.
+  const body = event.content != null && event.content !== '' ? event.content : undefined;
+  const preview = body ?? reasoning;
 
   switch (event.eventType) {
     case 'user-message':
@@ -321,10 +327,8 @@ function eventToCell(
         cacheRead: event.cacheReadTokens ?? undefined,
         cacheWrite: event.cacheWriteTokens ?? undefined,
         kind: 'message',
-        // A reasoning-only message has no body text; fall back to the reasoning
-        // so the row shows its content instead of an empty placeholder.
-        text: truncateContent(event.content ?? reasoning, 120),
-        previewMarkdown: event.content ?? reasoning,
+        text: truncateContent(preview, 120),
+        previewMarkdown: preview,
         thinkingDetail: reasoning,
         sourceBlocks: contentBlocksToSourceBlocks(event.contentBlocks ?? undefined),
         assistantMetrics: event.ttftMs != null ? {

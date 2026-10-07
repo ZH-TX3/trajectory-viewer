@@ -23,6 +23,9 @@ import type {
   ProfileDetail,
   SearchHit,
   SearchIndexStatus,
+  ResumeOutcome,
+  ResumeSettings,
+  ProviderCommand,
 } from './types';
 
 export const api = {
@@ -140,6 +143,35 @@ export const api = {
     targetPath: string,
   ): Promise<number> {
     return await invoke('export_session', { providerId, sourcePath, title, format, targetPath });
+  },
+
+  /** Open a terminal that continues this session in its recorded directory. */
+  async resumeSessionInTerminal(
+    providerId: string,
+    sessionId: string,
+    cwd: string | null,
+  ): Promise<ResumeOutcome> {
+    return await invoke('resume_session_in_terminal', { providerId, sessionId, cwd });
+  },
+
+  /** Whether a provider's configured resume command can actually be started. */
+  async resumeCommandAvailable(providerId: string): Promise<boolean> {
+    return await invoke('resume_command_available', { providerId });
+  },
+
+  /** Every provider's effective resume command and how it resolves. */
+  async resumeCommandStatuses(): Promise<ProviderCommand[]> {
+    return await invoke('resume_command_statuses');
+  },
+
+  /** Current resume launcher preferences. */
+  async getResumeSettings(): Promise<ResumeSettings> {
+    return await invoke('get_resume_settings');
+  },
+
+  /** Persist resume launcher preferences. */
+  async setResumeSettings(settings: ResumeSettings): Promise<void> {
+    return await invoke('set_resume_settings', { settings });
   },
 
   /** List trashed sessions (newest first). */

@@ -375,3 +375,29 @@ export interface SearchIndexProgress {
   total: number;
   current: string;
 }
+
+// ── Resume in terminal ───────────────────────────────────────────────────
+
+/** Preferences for the resume launcher: one command per provider. */
+export interface ResumeSettings {
+  /** Provider id → program to start. Missing entries use the provider default. */
+  commands: Record<string, string>;
+}
+
+/** One provider's effective launcher command and how it resolves. */
+export interface ProviderCommand {
+  providerId: string;
+  command: string;
+  /** 'program' (an executable on PATH), 'alias' (a shell alias), or 'missing'. */
+  kind: 'program' | 'alias' | 'missing';
+}
+
+/** What a launch reports back, so the UI can explain a degraded result. */
+export interface ResumeOutcome {
+  /** The command line that was launched, for display. */
+  commandLine: string;
+  /** Directory the terminal opened in; null when it fell back to home. */
+  workingDir: string | null;
+  /** The recorded working directory no longer exists. */
+  cwdMissing: boolean;
+}

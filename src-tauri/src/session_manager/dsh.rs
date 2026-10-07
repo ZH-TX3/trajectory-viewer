@@ -74,7 +74,7 @@ impl SessionProvider for DshProvider {
             created_at,
             last_active_at: created_at,
             source_path: Some(path.to_string_lossy().to_string()),
-            resume_command: Some(format!("dsh-tui --resume {session_id}")),
+            resume_command: crate::resume::display_command("dsh", &session_id),
         })
     }
 

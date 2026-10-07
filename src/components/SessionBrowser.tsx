@@ -12,14 +12,14 @@ import { SidebarSearch } from './SidebarSearch';
 import { SubagentCard } from './SubagentCard';
 import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import { cn } from '../lib/utils';
-import { isTaskNotification, parseTaskNotification } from '../utils/format';
+import { isTaskNotification, parseTaskNotification, resumeCommandText } from '../utils/format';
 import {
   ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware,
 } from './icons/BrandIcons';
 import {
   MessageSquare, GitBranch, Clock, FileText, Loader2,
   ChevronRight, ChevronDown, Folder, FolderOpen, GripVertical,
-  Pencil, Trash2, Copy, Check, RotateCw, Download,
+  Pencil, Trash2, Copy, Check, RotateCw, Download, SquareTerminal,
 } from 'lucide-react';
 
 // Custom session titles are persisted locally, keyed by provider::sessionId.
@@ -33,15 +33,6 @@ function readCustomTitles(): Record<string, string> {
 }
 function writeCustomTitles(titles: Record<string, string>) {
   localStorage.setItem(CUSTOM_TITLES_KEY, JSON.stringify(titles));
-}
-
-/** Resume command text for a session (claude / codex); empty for others. */
-function resumeCommandFor(session: SessionMeta | null): string {
-  if (!session) return '';
-  const id = session.sessionId;
-  if (session.providerId === 'claude') return session.resumeCommand ?? `claude --resume ${id}`;
-  if (session.providerId === 'codex') return session.resumeCommand ?? `codex resume ${id}`;
-  return session.resumeCommand ?? '';
 }
 
 /** Longer message content (especially tool output) shows collapsed by default. */
@@ -107,10 +98,15 @@ function TaskNotificationCard({ text }: { text: string }) {
 
 function MessageContent({ text }: { text: string }) {
   // A task notification is structured payload, not prose — render it as a card
-  // instead of dumping its XML.
+  // instead of dumping its XML. Split into its own component so the hook below
+  // is never called conditionally.
   if (isTaskNotification(text)) {
     return <TaskNotificationCard text={text} />;
   }
+  return <CollapsibleText text={text} />;
+}
+
+function CollapsibleText({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   // Collapse when the text is too long OR spills past 3 lines (common for tool
   // file dumps), so a short-but-multi-line block is still previewed compactly.
@@ -205,6 +201,11 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     noticeTimer.current = setTimeout(() => setNotice(null), 3200);
   }, []);
   const [copied, setCopied] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  // The launcher command (`claude`, or a wrapper such as `cc`). Null until
+  // loaded; `false` once known to be missing, which disables the button.
+  const [resumeCommand, setResumeCommand] = useState<string | null>(null);
+  const [resumeAvailable, setResumeAvailable] = useState<boolean | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   // Timestamp of the matched message to focus after opening a cross-session
@@ -312,6 +313,33 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     if (!selectedKey) return null;
     return sessions.find((s) => `${s.providerId}::${s.sessionId}` === selectedKey) ?? null;
   }, [sessions, selectedKey]);
+
+  // Probe the selected provider's launcher so the Resume button can disable
+  // itself (with a reason) rather than opening a tab that immediately errors.
+  // Each provider has its own CLI, so this re-checks when the session changes.
+  useEffect(() => {
+    const providerId = selectedSession?.providerId;
+    if (providerId === undefined) {
+      setResumeAvailable(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const statuses = await api.resumeCommandStatuses();
+        if (cancelled) return;
+        const mine = statuses.find((s) => s.providerId === providerId);
+        setResumeCommand(mine?.command ?? null);
+        setResumeAvailable(mine === undefined ? null : mine.kind !== 'missing');
+      } catch {
+        // Older backend without the command — leave the button enabled and
+        // let the launch report the real error.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSession?.providerId]);
 
   // Load messages for the selected session
   const loadMessages = useCallback(async () => {
@@ -500,7 +528,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
 
   const copyResume = useCallback(async () => {
     if (!selectedSession) return;
-    const cmd = resumeCommandFor(selectedSession);
+    const cmd = resumeCommandText(selectedSession?.resumeCommand, resumeCommand);
     if (!cmd) return;
     try {
       await navigator.clipboard.writeText(cmd);
@@ -509,7 +537,31 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     } catch {
       // clipboard unavailable — ignore
     }
-  }, [selectedSession]);
+  }, [selectedSession, resumeCommand]);
+
+  // Open a terminal that continues the session. The recorded `projectDir` is
+  // where it was started, so the resumed CLI lands in the same project.
+  const openInTerminal = useCallback(async () => {
+    if (!selectedSession) return;
+    setResuming(true);
+    try {
+      const outcome = await api.resumeSessionInTerminal(
+        selectedSession.providerId,
+        selectedSession.sessionId,
+        selectedSession.projectDir ?? null,
+      );
+      showNotice(
+        'ok',
+        outcome.cwdMissing
+          ? `Opened in ${outcome.workingDir ?? 'home'} — the session's project folder is gone`
+          : `Opened terminal: ${outcome.commandLine}`,
+      );
+    } catch (err) {
+      showNotice('error', String(err));
+    } finally {
+      setResuming(false);
+    }
+  }, [selectedSession, showNotice]);
 
   function sessionTitle(s: SessionMeta) {
     return (
@@ -875,10 +927,10 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
             {activeTab === 'messages' && (
               <div className="flex-1 flex flex-col min-h-0">
                 {/* Resume command header (fixed) */}
-                {selectedSession && resumeCommandFor(selectedSession) && (
+                {selectedSession && resumeCommandText(selectedSession.resumeCommand, resumeCommand) && (
                   <div className="flex items-center gap-1.5 px-4 py-1.5 border-b border-border/40 bg-background/95 backdrop-blur-sm shrink-0">
                     <span className="text-[10px] font-mono text-foreground/90 truncate select-all">
-                      {resumeCommandFor(selectedSession)}
+                      {resumeCommandText(selectedSession.resumeCommand, resumeCommand)}
                     </span>
                     <button
                       onClick={copyResume}
@@ -887,6 +939,29 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                     >
                       {copied ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
                       {copied ? 'Copied' : 'Copy'}
+                    </button>
+                    <button
+                      onClick={openInTerminal}
+                      disabled={resuming || resumeAvailable === false}
+                      title={
+                        resumeAvailable === false
+                          ? `\`${resumeCommand}\` was not found — set it in Settings`
+                          : 'Open a terminal that continues this session'
+                      }
+                      className={cn(
+                        'shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors',
+                        resumeAvailable === false
+                          ? 'text-muted-foreground/50 cursor-not-allowed'
+                          : 'text-cyan-700 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900/40',
+                        resuming && 'opacity-60',
+                      )}
+                    >
+                      {resuming ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : (
+                        <SquareTerminal className="size-3" />
+                      )}
+                      {resuming ? 'Opening…' : 'Resume'}
                     </button>
                   </div>
                 )}
@@ -1073,7 +1148,7 @@ function groupNameFor(session: SessionMeta): string {
     session.projectGroup ??
     session.projectDir ??
     (session.providerId === 'claude'
-      ? 'AI Code'
+      ? 'Claude Code'
       : session.providerId === 'dsh'
         ? 'DSH'
         : session.providerId === 'opencode'

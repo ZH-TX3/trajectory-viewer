@@ -13,6 +13,7 @@ import {
   isTaskNotification,
   KIND_LABEL,
   parseTaskNotification,
+  resumeCommandText,
   trajectoryPreviewText,
 } from './format';
 
@@ -165,5 +166,30 @@ describe('task notifications', () => {
 
   it('returns null for text that is not a notification', () => {
     expect(parseTaskNotification('just text')).toBeNull();
+  });
+});
+
+describe('resumeCommandText', () => {
+  it('swaps the program name and keeps the provider flags', () => {
+    expect(resumeCommandText('claude --resume abc', 'cc')).toBe('cc --resume abc');
+    expect(resumeCommandText('opencode --session ses_2', 'cc')).toBe('cc --session ses_2');
+  });
+
+  // With nothing configured the backend value stands on its own.
+  it('falls back to the backend value', () => {
+    expect(resumeCommandText('claude --resume abc', null)).toBe('claude --resume abc');
+    expect(resumeCommandText('claude --resume abc', '')).toBe('claude --resume abc');
+  });
+
+  // Providers with no resume form stay empty rather than showing a bare name.
+  it('is empty when the provider has no resume form', () => {
+    expect(resumeCommandText(null, 'cc')).toBe('');
+    expect(resumeCommandText('', 'cc')).toBe('');
+    expect(resumeCommandText(undefined, 'cc')).toBe('');
+  });
+
+  // A bare program name carries no flags, so only the name changes.
+  it('handles a command with no arguments', () => {
+    expect(resumeCommandText('claude', 'cc')).toBe('cc');
   });
 });

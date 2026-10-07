@@ -804,7 +804,7 @@ fn scan_sessions_sqlite(base: &Path) -> Vec<SessionMeta> {
                 created_at: Some(created),
                 last_active_at: Some(updated),
                 source_path: Some(format!("sqlite:{db_display}:{session_id}")),
-                resume_command: Some(format!("opencode session resume {session_id}")),
+                resume_command: crate::resume::display_command("opencode", &session_id),
             }
         })
         .collect()
@@ -861,7 +861,7 @@ fn parse_session_meta(storage: &Path, path: &Path) -> Option<SessionMeta> {
         created_at,
         last_active_at: updated_at.or(created_at),
         source_path: Some(path.to_string_lossy().to_string()),
-        resume_command: Some(format!("opencode session resume {session_id}")),
+        resume_command: crate::resume::display_command("opencode", &session_id),
     })
 }
 
@@ -1644,7 +1644,7 @@ mod tests {
         assert_eq!(by_id["ses_2"].title.as_deref(), Some("Only Json"));
         assert_eq!(
             by_id["ses_2"].resume_command.as_deref(),
-            Some("opencode session resume ses_2")
+            Some("opencode --session ses_2")
         );
     }
 

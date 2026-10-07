@@ -28,6 +28,7 @@ import { ArrowLeft, GripVertical } from 'lucide-react';
 import { ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware } from './icons/BrandIcons';
 import { cn } from '../lib/utils';
 import { BackupSection } from './BackupSection';
+import { ResumeSection } from './ResumeSection';
 import { TrashSection } from './TrashSection';
 import { SearchIndexSection } from './SearchIndexSection';
 import { ToolRootsSection } from './config-hub/ToolRootsSection';
@@ -194,26 +195,39 @@ export function SettingsView({
       <div className="flex-1 overflow-auto">
         <div className="max-w-xl mx-auto w-full p-4 space-y-4">
           {tab === 'general' && (
-            <section className="rounded-xl border border-border/40 overflow-hidden">
-              <div className="px-4 py-3 border-b border-border/40">
-                <h2 className="text-xs font-medium">Session tools</h2>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  Choose which tools are scanned into the session list. Drag by the handle to reorder.
-                </p>
-              </div>
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
-                  {orderedOptions.map((opt) => (
-                    <SortableRow
-                      key={opt.id}
-                      opt={opt}
-                      enabled={enabledProviders.has(opt.id)}
-                      onToggle={onToggleProvider}
-                    />
-                  ))}
-                </SortableContext>
-              </DndContext>
-            </section>
+            <>
+              <section className="rounded-xl border border-border/40 overflow-hidden">
+                <div className="px-4 py-3 border-b border-border/40">
+                  <h2 className="text-xs font-medium">Session tools</h2>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Choose which tools are scanned into the session list. Drag by the handle to reorder.
+                  </p>
+                </div>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+                    {orderedOptions.map((opt) => (
+                      <SortableRow
+                        key={opt.id}
+                        opt={opt}
+                        enabled={enabledProviders.has(opt.id)}
+                        onToggle={onToggleProvider}
+                      />
+                    ))}
+                  </SortableContext>
+                </DndContext>
+              </section>
+
+              <section className="rounded-xl border border-border/40 overflow-hidden">
+                <div className="px-4 py-3 border-b border-border/40">
+                  <h2 className="text-xs font-medium">Resume in terminal</h2>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Opens a terminal that continues the selected session, in the directory it was
+                    started from.
+                  </p>
+                </div>
+                <ResumeSection />
+              </section>
+            </>
           )}
 
           {tab === 'advanced' && (

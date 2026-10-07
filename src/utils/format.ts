@@ -141,6 +141,29 @@ export function parseTaskNotification(text: string): TaskNotification | null {
 }
 
 /**
+ * The command line shown for a session, with the CONFIGURED launcher command
+ * swapped in.
+ *
+ * The backend composes `resumeCommand` from the provider's default program
+ * name (`claude --resume <id>`) when it scans a session, because reading user
+ * settings there would make a scan depend on machine state. So the leading
+ * program is replaced here — otherwise the header would still read `claude`
+ * after switching the launcher to `cc`.
+ *
+ * Only the program name changes; the flags stay whatever the provider uses.
+ */
+export function resumeCommandText(
+  resumeCommand: string | null | undefined,
+  configured: string | null | undefined,
+): string {
+  if (resumeCommand == null || resumeCommand === '') return '';
+  if (configured == null || configured === '') return resumeCommand;
+  const space = resumeCommand.indexOf(' ');
+  // A bare program name has no flags to preserve.
+  return space < 0 ? configured : `${configured}${resumeCommand.slice(space)}`;
+}
+
+/**
  * CSS class name for the kind tag label.
  */
 export const KIND_LABEL: Record<string, string> = {  system: 'SYSTEM',

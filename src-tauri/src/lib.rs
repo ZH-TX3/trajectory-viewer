@@ -4,6 +4,7 @@ mod backup;
 mod commands;
 mod config_hub;
 mod export;
+mod resume;
 mod search;
 mod session_manager;
 mod trajectory;
@@ -34,6 +35,11 @@ pub fn run() {
             commands::get_backup_settings,
             commands::set_backup_settings,
             commands::export_session,
+            commands::resume_session_in_terminal,
+            commands::resume_command_available,
+            commands::resume_command_statuses,
+            commands::get_resume_settings,
+            commands::set_resume_settings,
             commands::list_trash,
             commands::restore_trash_entry,
             commands::delete_trash_entry,

@@ -139,7 +139,7 @@ impl SessionProvider for ClaudeProvider {
             created_at,
             last_active_at,
             source_path: Some(path.to_string_lossy().to_string()),
-            resume_command: Some(format!("claude --resume {session_id}")),
+            resume_command: crate::resume::display_command("claude", &session_id),
         })
     }
 
@@ -156,7 +156,7 @@ impl SessionProvider for ClaudeProvider {
     }
 }
 
-/// Read one AI Code JSONL transcript into the Messages tab's model.
+/// Read one Claude Code JSONL transcript into the Messages tab's model.
 ///
 /// Shared by the session loader and the subagent drill-down, since a subagent
 /// transcript is the same format as the session that spawned it.

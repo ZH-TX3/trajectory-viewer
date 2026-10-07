@@ -231,3 +231,40 @@ pub fn export_session(
 ) -> Result<usize, String> {
     crate::export::export_session(&provider_id, &source_path, &title, &format, &target_path)
 }
+
+// ── Resume in terminal ───────────────────────────────────────────────────
+
+/// Open a terminal that continues `session_id` in its recorded directory.
+#[tauri::command]
+pub fn resume_session_in_terminal(
+    provider_id: String,
+    session_id: String,
+    cwd: Option<String>,
+) -> Result<crate::resume::ResumeOutcome, String> {
+    crate::resume::launch(&provider_id, &session_id, cwd.as_deref())
+}
+
+/// Whether a provider's configured resume command can actually be started.
+#[tauri::command]
+pub fn resume_command_available(provider_id: String) -> bool {
+    let command = crate::resume::get_settings().command_for(&provider_id);
+    crate::resume::command_available(&command)
+}
+
+/// How every provider's resume command resolves (program / alias / missing).
+#[tauri::command]
+pub fn resume_command_statuses() -> Vec<crate::resume::ProviderCommand> {
+    crate::resume::all_command_status()
+}
+
+/// Current resume launcher preferences.
+#[tauri::command]
+pub fn get_resume_settings() -> crate::resume::ResumeSettings {
+    crate::resume::get_settings()
+}
+
+/// Persist resume launcher preferences.
+#[tauri::command]
+pub fn set_resume_settings(settings: crate::resume::ResumeSettings) -> Result<(), String> {
+    crate::resume::set_settings(&settings)
+}

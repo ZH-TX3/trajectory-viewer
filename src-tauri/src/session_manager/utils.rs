@@ -54,7 +54,13 @@ pub fn extract_text(value: &serde_json::Value) -> String {
                         .get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
-                    Some(format!("[Tool: {name}]"))
+                    // A subagent dispatch is worth naming: the agent type and its
+                    // one-line description say what was delegated, which a bare
+                    // `[Tool: Agent]` does not.
+                    match subagent_dispatch_detail(name, item.get("input")) {
+                        Some(detail) => Some(format!("[Tool: {name}] {detail}")),
+                        None => Some(format!("[Tool: {name}]")),
+                    }
                 } else if item_type == "tool_result" {
                     item.get("content").map(extract_text)
                 } else {
@@ -77,6 +83,32 @@ pub fn extract_text(value: &serde_json::Value) -> String {
         }
         _ => String::new(),
     }
+}
+
+/// One-line description of a subagent dispatch, for the `[Tool: Agent]` marker.
+///
+/// Returns `None` for every other tool, so the caller emits the bare marker.
+fn subagent_dispatch_detail(name: &str, input: Option<&serde_json::Value>) -> Option<String> {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower != "agent" && lower != "task" {
+        return None;
+    }
+    let input = input?;
+    let field = |key: &str| input.get(key).and_then(|v| v.as_str());
+    let description = field("description").unwrap_or("").trim();
+    let agent_type = field("subagent_type").unwrap_or("").trim();
+
+    let mut parts: Vec<String> = Vec::new();
+    if !agent_type.is_empty() {
+        parts.push(format!("{agent_type}:"));
+    }
+    if !description.is_empty() {
+        parts.push(truncate(description, 80));
+    }
+    if input.get("run_in_background").and_then(|v| v.as_bool()) == Some(true) {
+        parts.push("(background)".to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 /// Trim to `max_chars`, appending an ellipsis when truncated.
@@ -237,6 +269,50 @@ mod tests {
             "content": [{ "type": "tool_result", "content": "a.txt" }]
         });
         assert_eq!(extract_text(&message), "a.txt");
+    }
+
+    // A bare `[Tool: Agent]` says nothing about what was delegated; the
+    // Messages tab should name the agent type and its task.
+    #[test]
+    fn extract_text_names_a_subagent_dispatch() {
+        let message = serde_json::json!({
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "name": "Agent",
+                "input": {
+                    "subagent_type": "Explore",
+                    "description": "Audit the parser",
+                    "run_in_background": true
+                }
+            }]
+        });
+        assert_eq!(
+            extract_text(&message),
+            "[Tool: Agent] Explore: Audit the parser (background)"
+        );
+    }
+
+    #[test]
+    fn extract_text_keeps_other_tools_bare() {
+        let message = serde_json::json!({
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "name": "Bash",
+                "input": { "command": "ls" }
+            }]
+        });
+        assert_eq!(extract_text(&message), "[Tool: Bash]");
+    }
+
+    #[test]
+    fn extract_text_handles_a_dispatch_without_arguments() {
+        let message = serde_json::json!({
+            "role": "assistant",
+            "content": [{ "type": "tool_use", "name": "Task", "input": {} }]
+        });
+        assert_eq!(extract_text(&message), "[Tool: Task]");
     }
 
     #[test]

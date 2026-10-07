@@ -3,8 +3,19 @@
 // Converts a flat list of TrajectoryEvent[] into turn-grouped models
 // suitable for rendering in TrajectoryTable and TrajectoryTimeline.
 
-import type { TrajectoryEvent, ContentBlock } from '../types';
+import type { TrajectoryEvent, ContentBlock, SubagentRun } from '../types';
 import { trajectoryPreviewText } from './format';
+
+/**
+ * Injected context arrives as a `user` line but is not user input: Claude
+ * writes workspace/system reminders and subagent task notifications that way.
+ * Both must stay out of turn numbering, or every background subagent would
+ * start a phantom turn.
+ */
+export function isInjectedContext(content: string | null | undefined): boolean {
+  if (content == null) return false;
+  return content.includes('<system-reminder>') || content.includes('<task-notification>');
+}
 
 // ── Cell types ────────────────────────────────────────────────────────────
 
@@ -68,6 +79,10 @@ export interface TrajectoryCellProps {
   subagentType?: string;
   subagentDescription?: string;
   subagentBackground?: boolean;
+  /** The recorded run behind a dispatch row: status, cost, spawn tree, and
+   *  whether a transcript exists to drill into. Absent for older transcripts
+   *  with no `subagents/` directory. */
+  subagentRun?: SubagentRun;
 
   /** Timing */
   timeSeconds: number | null;
@@ -107,10 +122,10 @@ function withDerivedTurnStep(events: readonly TrajectoryEvent[]): TrajectoryEven
   let step = 0;
 
   return events.map((event) => {
-    // Injected system reminders don't start a new turn.
-    const isInjectedContext =
-      event.eventType === 'user-message' && event.content?.includes('<system-reminder>') === true;
-    if (event.eventType === 'user-message' && !isInjectedContext) {
+    // Injected system reminders and subagent task notifications don't start a
+    // new turn — they arrive as `user` lines but are not user input.
+    const injected = event.eventType === 'user-message' && isInjectedContext(event.content);
+    if (event.eventType === 'user-message' && !injected) {
       turn += 1;
       step = 0;
     } else if (event.eventType === 'tool-call' && turn > 0 && step === 0) {
@@ -173,13 +188,19 @@ function mergeToolResults(events: readonly TrajectoryEvent[]): TrajectoryEvent[]
  */
 export function deriveTrajectoryLayout(
   events: readonly TrajectoryEvent[],
+  subagents: readonly SubagentRun[] = [],
 ): readonly TrajectoryTurnModel[] {
   const turnMap = new Map<number, TrajectoryCellProps[]>();
   const standaloneCells: TrajectoryCellProps[] = [];
+  // A dispatch row finds its run by the tool call it was spawned from.
+  const runByCall = new Map<string, SubagentRun>();
+  for (const run of subagents) {
+    if (run.toolCallId != null) runByCall.set(run.toolCallId, run);
+  }
   let cellIndex = 0;
 
   for (const event of withDerivedTurnStep(mergeToolResults(events))) {
-    const cell = eventToCell(event, cellIndex);
+    const cell = eventToCell(event, cellIndex, runByCall);
     if (!cell) continue;
     cell.turn = event.turn;
     cell.step = event.step;
@@ -272,9 +293,18 @@ function reasoningText(event: TrajectoryEvent): string | undefined {
 function eventToCell(
   event: TrajectoryEvent,
   index: number,
+  runByCall: ReadonlyMap<string, SubagentRun> = new Map(),
 ): TrajectoryCellProps | null {
   const timeSeconds = event.durationMs != null ? event.durationMs / 1000 : null;
   const subagent = isSubagentTool(event.toolName) ? subagentInfo(event.toolArgs) : null;
+  // The recorded run supersedes the raw arguments: it carries the outcome and
+  // the real duration (a synchronous run's call/result timestamps are equal,
+  // since both lines are written when the run returns).
+  const run =
+    event.toolCallId != null && subagent !== null
+      ? (runByCall.get(event.toolCallId) ?? null)
+      : null;
+  const runSeconds = run?.durationMs != null ? run.durationMs / 1000 : null;
   const reasoning = reasoningText(event);
   // A reasoning-only assistant message carries an empty (not null) body, so an
   // empty string must count as absent — `??` alone would not catch it. When
@@ -287,7 +317,7 @@ function eventToCell(
     case 'user-message':
       // Claude Code injects workspace/system reminders as user messages —
       // render those as context (green) rather than a regular user turn.
-      const isContext = event.content?.includes('<system-reminder>') === true;
+      const isContext = isInjectedContext(event.content);
       return {
         index,
         sourceSeq: event.seq,
@@ -345,12 +375,12 @@ function eventToCell(
       return {
         index,
         sourceSeq: event.seq,
-        timeSeconds,
+        timeSeconds: runSeconds ?? timeSeconds,
         startedAt: event.ts,
         callId: event.toolCallId,
         toolName: event.toolName,
         toolArgs: event.toolArgs,
-        isError: event.isError ?? undefined,
+        isError: subagentRunFailed(run) || (event.isError ?? undefined),
         outputDetail: event.toolResult,
         input: event.inputTokens ?? undefined,
         output: event.outputTokens ?? undefined,
@@ -359,12 +389,19 @@ function eventToCell(
         kind: subagent !== null ? 'subtool' : 'tool',
         text: subagent !== null ? subagentCellText(subagent, event.toolName) : (event.toolName ?? 'Tool call'),
         inputDetail: event.toolArgs,
-        // The paired result is folded onto the call (see mergeToolResults).
-        result: event.toolResult ?? undefined,
-        resultPreviewMarkdown: event.toolResult ?? undefined,
-        subagentType: subagent?.type,
-        subagentDescription: subagent?.description,
+        // The paired result is folded onto the call (see mergeToolResults). A
+        // background dispatch's inline result is only Claude's launch banner,
+        // so the run's recorded answer wins when there is one.
+        // The run is authoritative when present: its `result` is null while a
+        // background run is still going, and the raw tool result in that case
+        // is only Claude's internal launch banner — never show that as a result.
+        result: run !== null ? (run.result ?? undefined) : (event.toolResult ?? undefined),
+        resultPreviewMarkdown:
+          run !== null ? (run.result ?? undefined) : (event.toolResult ?? undefined),
+        subagentType: run?.agentType ?? subagent?.type,
+        subagentDescription: run?.description ?? subagent?.description,
         subagentBackground: subagent?.background,
+        subagentRun: run ?? undefined,
         previewMarkdown: event.toolName
           ? `**${event.toolName}**\n\`\`\`json\n${event.toolArgs ?? ''}\n\`\`\``
           : undefined,
@@ -486,12 +523,20 @@ function subagentCellText(info: SubagentInfo, toolName: string | null): string {
   return info.type ?? toolName ?? 'Agent';
 }
 
+/** A run that ended badly is drawn as an error row. `async_launched` is still
+ *  running, and `stopped` is a user action — neither is a failure. */
+function subagentRunFailed(run: SubagentRun | null): boolean {
+  return run?.status === 'failed' || run?.status === 'killed';
+}
+
 // ── Virtual row helpers ───────────────────────────────────────────────────
 
 export interface VirtualRow {
   entries: Array<{ logicalIndex: number; cell: TrajectoryCellProps }>;
   height: number;
   key: string;
+  /** Indent level: 0 for the main ledger, 1+ inside an expanded transcript. */
+  depth: number;
 }
 
 const CONTENT_ROW_HEIGHT = 30;
@@ -505,24 +550,54 @@ export function summarizeTurnText(stepCount: number, toolCallCount: number): str
   return `${steps} · ${calls}`;
 }
 
+/** Flatten turn groups back into their record list, in display order. */
+export function flattenCells(
+  turns: readonly TrajectoryTurnModel[],
+): TrajectoryCellProps[] {
+  const cells: TrajectoryCellProps[] = [];
+  for (const turn of turns) {
+    for (const group of turn.groups) {
+      for (const cell of group.cells) cells.push(cell);
+    }
+  }
+  return cells;
+}
+
 /**
  * Group records into measurable virtual rows.
  *
  * The row key MUST be unique per row: tool-call and tool-result cells share
  * the same callId (and kind), so trajectoryRecordId alone would collide and
  * cause React to overlap/reuse rows (ghosting with progressively bolder text).
+ *
+ * `transcripts` maps an agent id to the flattened cells of its loaded
+ * transcript. An expanded dispatch splices those cells in right below itself,
+ * one indent level deeper — and since a transcript's own dispatch rows carry
+ * their own runs, nested subagents expand the same way, recursively.
  */
-export function groupVirtualRows(records: TrajectoryCellProps[]): VirtualRow[] {
+export function groupVirtualRows(
+  records: readonly TrajectoryCellProps[],
+  transcripts: ReadonlyMap<string, readonly TrajectoryCellProps[]> = new Map(),
+  expandedAgents: ReadonlySet<string> = new Set(),
+): VirtualRow[] {
   const rows: VirtualRow[] = [];
 
-  for (const cell of records) {
-    rows.push({
-      entries: [{ logicalIndex: cell.index, cell }],
-      height: CONTENT_ROW_HEIGHT,
-      key: `${trajectoryRecordId(cell)}\0#\0${cell.index}`,
-    });
-  }
+  const push = (cells: readonly TrajectoryCellProps[], depth: number) => {
+    for (const cell of cells) {
+      const agentId = cell.subagentRun?.agentId;
+      rows.push({
+        entries: [{ logicalIndex: cell.index, cell }],
+        height: CONTENT_ROW_HEIGHT,
+        key: `${trajectoryRecordId(cell)}\0#\0${cell.index}\0d${depth}`,
+        depth,
+      });
+      if (agentId == null || !expandedAgents.has(agentId)) continue;
+      const children = transcripts.get(agentId);
+      if (children != null) push(children, depth + 1);
+    }
+  };
 
+  push(records, 0);
   return rows;
 }
 

@@ -144,60 +144,7 @@ impl SessionProvider for ClaudeProvider {
     }
 
     fn load_messages(&self, source: &str) -> Result<Vec<SessionMessage>, String> {
-        use std::fs::File;
-        use std::io::{BufRead, BufReader};
-
-        let file = File::open(source).map_err(|e| format!("Failed to open session file: {e}"))?;
-        let reader = BufReader::new(file);
-        let mut messages = Vec::new();
-
-        for line in reader.lines() {
-            let line = line.map_err(|e| format!("Read error: {e}"))?;
-            let value: serde_json::Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            if value.get("isMeta").and_then(|v| v.as_bool()) == Some(true) {
-                continue;
-            }
-
-            let Some(message) = value.get("message") else {
-                continue;
-            };
-
-            let mut role = message
-                .get("role")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-
-            // Tool results arrive as user-role messages; surface them as "tool".
-            if role == "user" {
-                if let Some(items) = message.get("content").and_then(|v| v.as_array()) {
-                    if !items.is_empty()
-                        && items.iter().all(|item| {
-                            item.get("type").and_then(|v| v.as_str()) == Some("tool_result")
-                        })
-                    {
-                        role = "tool".to_string();
-                    }
-                }
-            }
-
-            let content = extract_text(message);
-            if content.trim().is_empty() {
-                continue;
-            }
-
-            messages.push(SessionMessage {
-                role,
-                content,
-                ts: value.get("timestamp").and_then(parse_timestamp_to_ms),
-            });
-        }
-
-        Ok(messages)
+        load_messages(Path::new(source))
     }
 
     fn trash_session(&self, source: &str) -> Result<String, String> {
@@ -207,6 +154,105 @@ impl SessionProvider for ClaudeProvider {
     fn trash_sessions_in_dir(&self, dir: &Path) -> Result<usize, String> {
         crate::session_manager::trash_files_in_dir(self.id(), dir)
     }
+}
+
+/// Read one AI Code JSONL transcript into the Messages tab's model.
+///
+/// Shared by the session loader and the subagent drill-down, since a subagent
+/// transcript is the same format as the session that spawned it.
+pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
+    load_messages_with_runs(path, path)
+}
+
+/// Read a transcript, resolving dispatch runs against `runs_of`.
+///
+/// The two paths differ for a subagent: its transcript sits in
+/// `subagents/agent-*.jsonl`, but the runs it dispatched are recorded in the
+/// *main* session's `subagents/` directory alongside its siblings. Deriving the
+/// run list from the transcript's own path finds nothing, so every nested
+/// dispatch would lose its run.
+pub fn load_messages_with_runs(path: &Path, runs_of: &Path) -> Result<Vec<SessionMessage>, String> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+
+    let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
+    let reader = BufReader::new(file);
+    let mut messages = Vec::new();
+
+    // A subagent's dispatch is one assistant line, and its run is recorded
+    // beside the session — attach the run to the message that dispatched it
+    // so the Messages tab can show what was delegated, not just
+    // `[Tool: Agent]`.
+    let runs = crate::trajectory::subagent::scan(runs_of);
+    let run_by_call: std::collections::HashMap<&str, &crate::trajectory::subagent::SubagentRun> =
+        runs.iter()
+            .filter_map(|run| Some((run.tool_call_id.as_deref()?, run)))
+            .collect();
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Read error: {e}"))?;
+        let value: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if value.get("isMeta").and_then(|v| v.as_bool()) == Some(true) {
+            continue;
+        }
+
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+
+        let mut role = message
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Tool results arrive as user-role messages; surface them as "tool".
+        if role == "user" {
+            if let Some(items) = message.get("content").and_then(|v| v.as_array()) {
+                if !items.is_empty()
+                    && items.iter().all(|item| {
+                        item.get("type").and_then(|v| v.as_str()) == Some("tool_result")
+                    })
+                {
+                    role = "tool".to_string();
+                }
+            }
+        }
+
+        let content = extract_text(message);
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        // One assistant line can carry several `Agent` calls, so collect
+        // every dispatch in block order.
+        let subagents: Vec<crate::trajectory::subagent::SubagentRun> = message
+            .get("content")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("type").and_then(|v| v.as_str()) == Some("tool_use"))
+                    .filter_map(|item| item.get("id").and_then(|v| v.as_str()))
+                    .filter_map(|id| run_by_call.get(id))
+                    .map(|run| (*run).clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        messages.push(SessionMessage {
+            role,
+            content,
+            ts: value.get("timestamp").and_then(parse_timestamp_to_ms),
+            subagents,
+        });
+    }
+
+    Ok(messages)
 }
 
 /// Whether a line carries a user-role message (either shape Claude uses).
@@ -322,5 +368,116 @@ mod tests {
         assert!(msgs[1].content.contains("[Tool: Bash]"));
         assert_eq!(msgs[2].role, "tool");
         assert_eq!(msgs[2].content, "a.txt");
+    }
+
+    /// Write a session with one subagent dispatch and its recorded run.
+    fn write_dispatch_fixture(dir: &Path, session: &Path) {
+        let subagents = dir.join("sess").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        write(
+            session,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"go"},"timestamp":"2026-03-06T10:00:00Z"}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Agent","input":{"description":"Audit the parser","subagent_type":"Explore","run_in_background":true}}]},"timestamp":"2026-03-06T10:01:00Z"}"#,
+                "\n",
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"launched"}]},"toolUseResult":{"status":"async_launched","agentId":"aaa","resolvedModel":"m"},"timestamp":"2026-03-06T10:01:01Z"}"#,
+                "\n",
+            ),
+        );
+        std::fs::write(
+            subagents.join("agent-aaa.meta.json"),
+            r#"{"agentType":"Explore","description":"Audit the parser","toolUseId":"call_1","spawnDepth":1}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            subagents.join("agent-aaa.jsonl"),
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"Audit the parser"},"timestamp":"2026-03-06T10:01:02Z"}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":"It is flat."},"timestamp":"2026-03-06T10:02:00Z"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+    }
+
+    // A dispatch used to reach the Messages tab as a bare `[Tool: Agent]`
+    // line, losing everything the run recorded about itself.
+    #[test]
+    fn load_messages_attaches_the_dispatched_run() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("sess.jsonl");
+        write_dispatch_fixture(dir.path(), &session);
+
+        let msgs = ClaudeProvider
+            .load_messages(session.to_str().unwrap())
+            .unwrap();
+        let dispatch = msgs
+            .iter()
+            .find(|m| !m.subagents.is_empty())
+            .expect("a message carrying its run");
+        assert_eq!(dispatch.role, "assistant");
+        assert_eq!(dispatch.subagents.len(), 1);
+        let run = &dispatch.subagents[0];
+        assert_eq!(run.agent_id, "aaa");
+        assert_eq!(run.agent_type.as_deref(), Some("Explore"));
+        assert!(run.has_transcript);
+        // Ordinary messages stay free of runs.
+        assert!(msgs[0].subagents.is_empty());
+    }
+
+    #[test]
+    fn subagent_transcript_loads_as_messages() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("sess.jsonl");
+        write_dispatch_fixture(dir.path(), &session);
+        let transcript = crate::trajectory::subagent::transcript_path(&session, "aaa").unwrap();
+
+        let msgs = load_messages(&transcript).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[1].content, "It is flat.");
+    }
+
+    // A nested subagent is dispatched from INSIDE its parent's transcript, but
+    // its run is recorded in the main session's `subagents/` directory. Reading
+    // the transcript's runs from the transcript's own path finds nothing, so
+    // every nested dispatch silently lost its run.
+    #[test]
+    fn nested_dispatch_resolves_runs_against_the_main_session() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("sess.jsonl");
+        write_dispatch_fixture(dir.path(), &session);
+        let subagents = dir.path().join("sess").join("subagents");
+
+        // The child run, plus a grandchild dispatched from the child's own
+        // transcript. Both metas live in the main session's directory.
+        std::fs::write(
+            subagents.join("agent-bbb.meta.json"),
+            r#"{"agentType":"Explore","toolUseId":"call_2","parentAgentId":"aaa"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            subagents.join("agent-bbb.jsonl"),
+            concat!(
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_2","name":"Agent","input":{"description":"go deeper"}}]},"timestamp":"2026-03-06T10:01:30Z"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let transcript = crate::trajectory::subagent::transcript_path(&session, "bbb").unwrap();
+
+        // Reading the transcript alone finds no runs — that is the trap.
+        assert!(load_messages(&transcript).unwrap()[0].subagents.is_empty());
+
+        let msgs = load_messages_with_runs(&transcript, &session).unwrap();
+        let dispatch = msgs
+            .iter()
+            .find(|m| !m.subagents.is_empty())
+            .expect("the nested dispatch resolves against the main session");
+        assert_eq!(dispatch.subagents[0].agent_id, "bbb");
+        assert_eq!(dispatch.subagents[0].spawn_depth, 2);
     }
 }

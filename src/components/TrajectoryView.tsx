@@ -1,6 +1,10 @@
 // ── Trajectory View ──────────────────────────────────────────────────────
 //
 // Main trajectory view orchestrating toolbar, timeline, and table.
+//
+// It also owns the subagent drill-down stack: a dispatch row can be opened as
+// a full trajectory of its own ("主线 › Explore › d2 Explore"), rendered by the
+// same body, so the nested view keeps the timeline, detail panel and search.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TrajectoryToolbar } from './TrajectoryToolbar';
@@ -8,12 +12,14 @@ import { TrajectoryTimeline } from './TrajectoryTimeline';
 import { TrajectoryTable } from './TrajectoryTable';
 import {
   deriveTrajectoryLayout,
+  flattenCells,
   trajectoryRecordId,
   trajectoryTimelineFocusIndexes,
 } from '../utils/layout';
 import { TrajectorySearchIndex } from '../utils/layout';
-import type { TrajectoryTurnModel, TrajectoryTimelineMode } from '../utils/layout';
-import type { TrajectoryData } from '../types';
+import type { TrajectoryCellProps, TrajectoryTurnModel, TrajectoryTimelineMode } from '../utils/layout';
+import type { SubagentRun, TrajectoryData } from '../types';
+import { api } from '../api';
 
 interface TrajectoryViewProps {
   data: TrajectoryData;
@@ -23,9 +29,125 @@ interface TrajectoryViewProps {
    * than highlighting every occurrence of the query.
    */
   focusTs?: number | null;
+  /**
+   * The session file on disk. Subagent transcripts live beside it, so this is
+   * what makes drill-down and inline expansion possible; without it the view
+   * stays flat.
+   */
+  sourcePath?: string | null;
 }
 
-export function TrajectoryView({ data, focusTs }: TrajectoryViewProps) {
+interface DrillEntry {
+  run: SubagentRun;
+  data: TrajectoryData;
+}
+
+export function TrajectoryView({ data, focusTs, sourcePath }: TrajectoryViewProps) {
+  // One entry per drilled-in subagent; the last one is what's on screen.
+  const [stack, setStack] = useState<DrillEntry[]>([]);
+  const [drillError, setDrillError] = useState<string | null>(null);
+
+  // The root session changed — a drill path from the previous one is stale.
+  useEffect(() => {
+    setStack([]);
+    setDrillError(null);
+  }, [sourcePath]);
+
+  const active = stack.length > 0 ? stack[stack.length - 1] : null;
+
+  const handleOpenSubagent = useCallback(
+    async (run: SubagentRun) => {
+      if (sourcePath == null) return;
+      setDrillError(null);
+      try {
+        const sub = await api.getSubagentTrajectory(sourcePath, run.agentId);
+        setStack((prev) => [...prev, { run, data: sub }]);
+      } catch (error) {
+        setDrillError(String(error));
+      }
+    },
+    [sourcePath],
+  );
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      {stack.length > 0 && (
+        <nav
+          aria-label="Subagent drill path"
+          className="flex items-center gap-1 px-3 py-1 text-[11px] border-b border-border/40 bg-muted/30 shrink-0 min-w-0"
+        >
+          <button
+            type="button"
+            onClick={() => setStack([])}
+            className="shrink-0 text-cyan-700 dark:text-cyan-300 hover:underline"
+          >
+            main session
+          </button>
+          {stack.map((entry, level) => (
+            <span key={entry.run.agentId} className="flex items-center gap-1 min-w-0">
+              <span className="text-muted-foreground/60 shrink-0">›</span>
+              <button
+                type="button"
+                disabled={level === stack.length - 1}
+                onClick={() => setStack((prev) => prev.slice(0, level + 1))}
+                className={
+                  level === stack.length - 1
+                    ? 'truncate text-foreground/80 cursor-default'
+                    : 'truncate text-cyan-700 dark:text-cyan-300 hover:underline'
+                }
+              >
+                {subagentLabel(entry.run)}
+              </button>
+            </span>
+          ))}
+          <button
+            type="button"
+            onClick={() => setStack((prev) => prev.slice(0, -1))}
+            className="shrink-0 ml-auto px-1.5 py-0.5 rounded border border-border/60 text-muted-foreground hover:text-foreground hover:bg-background"
+          >
+            ← back
+          </button>
+        </nav>
+      )}
+
+      {drillError !== null && (
+        <div className="px-3 py-1 text-[11px] text-red-600 dark:text-red-400 border-b border-border/40 shrink-0">
+          Could not open subagent: {drillError}
+        </div>
+      )}
+
+      <TrajectoryBody
+        key={active?.run.agentId ?? 'root'}
+        data={active?.data ?? data}
+        focusTs={focusTs}
+        sourcePath={sourcePath}
+        onOpenSubagent={sourcePath == null ? undefined : handleOpenSubagent}
+      />
+    </div>
+  );
+}
+
+/** Breadcrumb text for a drilled-in run. */
+function subagentLabel(run: SubagentRun): string {
+  if (run.name != null && run.name !== '') return run.name;
+  if (run.description != null && run.description !== '') return run.description;
+  return run.agentType ?? run.agentId;
+}
+
+// ── Body ─────────────────────────────────────────────────────────────────
+//
+// The ledger itself: toolbar + timeline + table. Mounted once per drill level
+// (keyed by agent id), so each level keeps its own search, collapse and
+// selection state.
+
+interface TrajectoryBodyProps {
+  data: TrajectoryData;
+  focusTs?: number | null;
+  sourcePath?: string | null;
+  onOpenSubagent?: (run: SubagentRun) => void;
+}
+
+function TrajectoryBody({ data, focusTs, sourcePath, onOpenSubagent }: TrajectoryBodyProps) {
   // UI state
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedTurns, setCollapsedTurns] = useState<Set<number>>(new Set());
@@ -34,11 +156,92 @@ export function TrajectoryView({ data, focusTs }: TrajectoryViewProps) {
   const [timelineRange, setTimelineRange] = useState<{ start: number; end: number } | null>(null);
   const [selectedRecordIndex, setSelectedRecordIndex] = useState<number | null>(null);
 
+  // Inline-expanded subagent transcripts, keyed by agent id. Loaded on demand:
+  // one session can hold a dozen runs and thousands of events between them.
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [transcripts, setTranscripts] = useState<Map<string, TrajectoryCellProps[]>>(new Map());
+  const [pendingAgents, setPendingAgents] = useState<Set<string>>(new Set());
+  const [expandError, setExpandError] = useState<string | null>(null);
+
   // Derive layout from events
-  const turns = useMemo(() => {
-    if (!data) return [] as readonly TrajectoryTurnModel[];
-    return deriveTrajectoryLayout(data.events);
-  }, [data]);
+  const turns = useMemo(
+    () => deriveTrajectoryLayout(data.events, data.subagents),
+    [data],
+  );
+
+  // A transcript larger than this is not spliced into the ledger — a 400-event
+  // run would bury the main session around it. The drill-down view is the way
+  // in instead.
+  const INLINE_LIMIT = 200;
+
+  // Each transcript is laid out independently, so its record indexes restart
+  // at 0 and would collide with the main ledger's — a nested row would then
+  // inherit the selection highlight (and request aggregation) of an unrelated
+  // main row. Rebase them into a disjoint range instead.
+  const maxCellIndex = useMemo(
+    () => flattenCells(turns).reduce((max, cell) => Math.max(max, cell.index + 1), 0),
+    [turns],
+  );
+  const nextIndexRef = useRef(0);
+
+  const loadTranscript = useCallback(
+    async (run: SubagentRun) => {
+      if (sourcePath == null) return;
+      setExpandError(null);
+      setPendingAgents((prev) => new Set(prev).add(run.agentId));
+      try {
+        const sub = await api.getSubagentTrajectory(sourcePath, run.agentId);
+        const cells = flattenCells(deriveTrajectoryLayout(sub.events, sub.subagents));
+        if (cells.length > INLINE_LIMIT) {
+          // Too large to inline: undo the expansion and hand off to the
+          // drill-down, which can render it with its own timeline.
+          setExpandedAgents((prev) => {
+            const next = new Set(prev);
+            next.delete(run.agentId);
+            return next;
+          });
+          onOpenSubagent?.(run);
+          return;
+        }
+        const base = Math.max(nextIndexRef.current, maxCellIndex);
+        nextIndexRef.current = base + cells.length;
+        setTranscripts((prev) =>
+          new Map(prev).set(
+            run.agentId,
+            cells.map((cell, offset) => ({ ...cell, index: base + offset })),
+          ),
+        );
+      } catch (error) {
+        setExpandError(String(error));
+        setExpandedAgents((prev) => {
+          const next = new Set(prev);
+          next.delete(run.agentId);
+          return next;
+        });
+      } finally {
+        setPendingAgents((prev) => {
+          const next = new Set(prev);
+          next.delete(run.agentId);
+          return next;
+        });
+      }
+    },
+    [sourcePath, onOpenSubagent, maxCellIndex],
+  );
+
+  const handleToggleExpand = useCallback(
+    (run: SubagentRun) => {
+      const collapsing = expandedAgents.has(run.agentId);
+      setExpandedAgents((prev) => {
+        const next = new Set(prev);
+        if (collapsing) next.delete(run.agentId);
+        else next.add(run.agentId);
+        return next;
+      });
+      if (!collapsing && !transcripts.has(run.agentId)) void loadTranscript(run);
+    },
+    [expandedAgents, transcripts, loadTranscript],
+  );
 
   // When told to focus a message (cross-session search result), select and
   // open the record whose start time is closest to the target. The first
@@ -217,6 +420,12 @@ export function TrajectoryView({ data, focusTs }: TrajectoryViewProps) {
         callCount={callCount}
       />
 
+      {expandError !== null && (
+        <div className="px-3 py-1 text-[11px] text-red-600 dark:text-red-400 border-b border-border/40 shrink-0">
+          Could not load subagent transcript: {expandError}
+        </div>
+      )}
+
       {/* Timeline */}
       <TrajectoryTimeline
         turns={turns}
@@ -238,6 +447,11 @@ export function TrajectoryView({ data, focusTs }: TrajectoryViewProps) {
         _onToggleTurn={handleToggleTurn}
         _collapsedAssistants={collapsedAssistants}
         _onToggleAssistant={handleToggleAssistant}
+        transcripts={transcripts}
+        expandedAgents={expandedAgents}
+        pendingAgents={pendingAgents}
+        onToggleExpand={sourcePath == null ? undefined : handleToggleExpand}
+        onOpenSubagent={onOpenSubagent}
       />
     </div>
   );

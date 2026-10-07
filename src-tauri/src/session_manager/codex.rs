@@ -170,6 +170,7 @@ impl SessionProvider for CodexProvider {
                 role,
                 content,
                 ts: value.get("timestamp").and_then(parse_timestamp_to_ms),
+                ..Default::default()
             });
         }
 

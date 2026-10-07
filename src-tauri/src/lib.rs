@@ -17,6 +17,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::parse_trajectory_file,
             commands::get_session_trajectory,
+            commands::get_subagent_trajectory,
+            commands::get_subagent_messages,
             commands::list_sessions,
             commands::get_session_messages,
             commands::delete_session,

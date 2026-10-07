@@ -18,6 +18,11 @@ mod opencode;
 mod provider;
 mod utils;
 
+/// Claude's message loader is shared with the subagent drill-down, which reads
+/// a transcript in the same format but resolves its runs against the main
+/// session.
+pub use claude::load_messages_with_runs as load_claude_messages_with_runs;
+
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -55,13 +60,18 @@ pub struct SessionMeta {
     pub resume_command: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMessage {
     pub role: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ts: Option<i64>,
+    /// Subagents this message dispatched, in call order. One assistant message
+    /// can hold several `Agent` calls, so this is a list rather than a single
+    /// run. Empty for providers without subagents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<crate::trajectory::subagent::SubagentRun>,
 }
 
 /// Scan every registered provider and merge the results, newest first.

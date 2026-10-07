@@ -96,11 +96,54 @@ export function trajectoryPreviewText(text: string): string {
     : preview;
 }
 
+// ── Subagent task notifications ──────────────────────────────────────────
+//
+// A finished subagent reports back on a `user` line holding a
+// `<task-notification>` XML blob. Raw, it is 2–3KB of tags and temp-file
+// paths; these pull out the parts worth showing.
+
+export interface TaskNotification {
+  agentId: string | null;
+  status: string | null;
+  summary: string | null;
+  result: string | null;
+  /** A run that ended badly — `failed` or `killed`. */
+  isError: boolean;
+}
+
+/** Whether a message body is a subagent task notification. */
+export function isTaskNotification(text: string | null | undefined): boolean {
+  return text != null && text.trimStart().startsWith('<task-notification>');
+}
+
+/** Read `<tag>value</tag>` out of a task notification body. */
+function xmlField(text: string, tag: string): string | null {
+  const open = `<${tag}>`;
+  const start = text.indexOf(open);
+  if (start < 0) return null;
+  const close = text.indexOf(`</${tag}>`, start + open.length);
+  if (close < 0) return null;
+  const value = text.slice(start + open.length, close).trim();
+  return value === '' ? null : value;
+}
+
+/** Parse a `<task-notification>` body; `null` when the text is not one. */
+export function parseTaskNotification(text: string): TaskNotification | null {
+  if (!isTaskNotification(text)) return null;
+  const status = xmlField(text, 'status');
+  return {
+    agentId: xmlField(text, 'task-id'),
+    status,
+    summary: xmlField(text, 'summary'),
+    result: xmlField(text, 'result'),
+    isError: status === 'failed' || status === 'killed',
+  };
+}
+
 /**
  * CSS class name for the kind tag label.
  */
-export const KIND_LABEL: Record<string, string> = {
-  system: 'SYSTEM',
+export const KIND_LABEL: Record<string, string> = {  system: 'SYSTEM',
   user: 'USER',
   context: 'CONTEXT',
   compacted: 'COMPACTED',

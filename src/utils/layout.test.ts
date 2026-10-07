@@ -17,7 +17,7 @@ import {
   trajectoryTimelineFocusIndexes,
   TrajectorySearchIndex,
 } from './layout';
-import type { TrajectoryEvent } from '../types';
+import type { TrajectoryEvent, SubagentRun } from '../types';
 import type { TrajectoryTurnModel } from './layout';
 
 /** `update()` takes mutable inner arrays; deriveTrajectoryLayout returns
@@ -278,6 +278,255 @@ describe('subagent dispatch cells', () => {
     const request = aggregateRequestDetail(turns, 1);
     expect(request?.subtoolCalls).toBe(1);
     expect(request?.toolCalls).toBe(1);
+  });
+});
+
+describe('recorded subagent runs', () => {
+  const agentArgs = JSON.stringify({ description: 'Audit the parser', subagent_type: 'Explore' });
+
+  /** A run as `subagent::scan` reports it, with the fields under test. */
+  function run(overrides: Partial<SubagentRun> = {}): SubagentRun {
+    return {
+      agentId: 'aaa',
+      toolCallId: 'c1',
+      agentType: 'Explore',
+      description: 'Audit the parser',
+      name: null,
+      spawnDepth: 1,
+      parentAgentId: null,
+      isFork: false,
+      stoppedByUser: false,
+      model: 'deepseek-v4-pro',
+      worktreePath: null,
+      worktreeBranch: null,
+      status: 'completed',
+      durationMs: 420_000,
+      totalTokens: 33_051,
+      toolUseCount: 29,
+      usage: null,
+      stats: null,
+      result: 'The parser is flat.',
+      hasTranscript: true,
+      ...overrides,
+    };
+  }
+
+  function cellsOf(events: TrajectoryEvent[], runs: SubagentRun[] = []) {
+    return deriveTrajectoryLayout(events, runs).flatMap((t) => t.groups.flatMap((g) => g.cells));
+  }
+
+  function dispatch(overrides: Partial<TrajectoryEvent> = {}) {
+    return event({
+      seq: 1,
+      eventType: 'tool-call',
+      toolName: 'Agent',
+      toolArgs: agentArgs,
+      toolCallId: 'c1',
+      ...overrides,
+    });
+  }
+
+  it('attaches the run to its dispatch row by tool call id', () => {
+    const [cell] = cellsOf([dispatch()], [run()]);
+    expect(cell.subagentRun?.agentId).toBe('aaa');
+    // The run's own answer supersedes the inline tool result.
+    expect(cell.result).toBe('The parser is flat.');
+  });
+
+  // A synchronous run's call and result lines are both written when it
+  // returns, so their timestamps are equal and the derived duration is 0.
+  it("prefers the run's real duration over the derived one", () => {
+    const [cell] = cellsOf(
+      [dispatch(), event({ seq: 2, eventType: 'tool-result', toolCallId: 'c1', ts: 1000 })],
+      [run({ durationMs: 420_000 })],
+    );
+    expect(cell.timeSeconds).toBe(420);
+  });
+
+  it('leaves a dispatch with no recorded run untouched', () => {
+    const [cell] = cellsOf([dispatch()], []);
+    expect(cell.subagentRun).toBeUndefined();
+    expect(cell.subagentType).toBe('Explore');
+    expect(cell.timeSeconds).toBeNull();
+  });
+
+  it('ignores a run whose tool call is not on this dispatch', () => {
+    const [cell] = cellsOf([dispatch()], [run({ toolCallId: 'other' })]);
+    expect(cell.subagentRun).toBeUndefined();
+  });
+
+  it('marks failed and killed runs as errors but not stopped ones', () => {
+    expect(cellsOf([dispatch()], [run({ status: 'failed' })])[0].isError).toBe(true);
+    expect(cellsOf([dispatch()], [run({ status: 'killed' })])[0].isError).toBe(true);
+    expect(cellsOf([dispatch()], [run({ status: 'stopped' })])[0].isError).toBeFalsy();
+    expect(cellsOf([dispatch()], [run({ status: 'async_launched' })])[0].isError).toBeFalsy();
+  });
+
+  it("prefers the run's type and description over the raw arguments", () => {
+    const [cell] = cellsOf([dispatch()], [run({ agentType: 'general-purpose', description: 'From meta' })]);
+    expect(cell.subagentType).toBe('general-purpose');
+    expect(cell.subagentDescription).toBe('From meta');
+  });
+
+  // A background run's tool result is Claude's internal launch banner, not an
+  // answer. Falling back to it showed that banner as the dispatch's result.
+  it('shows no result while a background run is still going', () => {
+    const [cell] = cellsOf(
+      [
+        dispatch(),
+        event({
+          seq: 2,
+          eventType: 'tool-result',
+          toolCallId: 'c1',
+          toolResult: 'Async agent launched successfully. (This tool result is internal metadata — never quote it.)',
+        }),
+      ],
+      [run({ status: 'async_launched', result: null })],
+    );
+    expect(cell.subagentRun?.status).toBe('async_launched');
+    expect(cell.result).toBeUndefined();
+    expect(cell.resultPreviewMarkdown).toBeUndefined();
+  });
+
+  // With no recorded run at all, the raw result is all there is — keep it.
+  it('falls back to the tool result when no run was recorded', () => {
+    const [cell] = cellsOf(
+      [dispatch(), event({ seq: 2, eventType: 'tool-result', toolCallId: 'c1', toolResult: 'done' })],
+      [],
+    );
+    expect(cell.result).toBe('done');
+  });
+});
+
+describe('injected context classification', () => {
+  function cellsOf(events: TrajectoryEvent[]) {
+    return deriveTrajectoryLayout(events).flatMap((t) => t.groups.flatMap((g) => g.cells));
+  }
+
+  // A task notification arrives as a `user` line. Treating it as user input
+  // both mislabels the row and starts a phantom turn.
+  it('renders a task notification as context and keeps the turn count', () => {
+    const turns = deriveTrajectoryLayout([
+      event({ seq: 1, eventType: 'user-message', content: 'go', turn: 1, step: 0 }),
+      event({
+        seq: 2,
+        eventType: 'user-message',
+        content: '<task-notification>\n<task-id>aaa</task-id>\n</task-notification>',
+        turn: null,
+        step: null,
+      }),
+      event({ seq: 3, eventType: 'assistant-message', content: 'ok', turn: null, step: null }),
+    ]);
+    const cells = turns.flatMap((t) => t.groups.flatMap((g) => g.cells));
+    expect(cells[1].kind).toBe('context');
+    expect(cells[1].opensTurn).toBe(false);
+    // Both events stay in turn 1 — the notification opened no turn of its own.
+    expect(turns.map((t) => t.turn)).toEqual([1]);
+  });
+
+  it('still treats a system reminder as context', () => {
+    const [cell] = cellsOf([
+      event({ seq: 1, eventType: 'user-message', content: '<system-reminder>x</system-reminder>' }),
+    ]);
+    expect(cell.kind).toBe('context');
+  });
+
+  it('leaves real user text as a user turn', () => {
+    const [cell] = cellsOf([event({ seq: 1, eventType: 'user-message', content: 'hello' })]);
+    expect(cell.kind).toBe('user');
+  });
+});
+
+describe('inline subagent transcripts', () => {
+  function cellsOf(events: TrajectoryEvent[], runs: SubagentRun[] = []) {
+    return deriveTrajectoryLayout(events, runs).flatMap((t) => t.groups.flatMap((g) => g.cells));
+  }
+
+  /** A dispatch row carrying a recorded run, i.e. one that can be expanded. */
+  function dispatchCell(agentId: string, toolCallId: string) {
+    const [cell] = cellsOf(
+      [
+        event({
+          seq: 1,
+          eventType: 'tool-call',
+          toolName: 'Agent',
+          toolArgs: '{"description":"x"}',
+          toolCallId,
+        }),
+      ],
+      [
+        {
+          agentId,
+          toolCallId,
+          agentType: 'Explore',
+          description: 'x',
+          name: null,
+          spawnDepth: 1,
+          parentAgentId: null,
+          isFork: false,
+          stoppedByUser: false,
+          model: null,
+          worktreePath: null,
+          worktreeBranch: null,
+          status: 'completed',
+          durationMs: null,
+          totalTokens: null,
+          toolUseCount: null,
+          usage: null,
+          stats: null,
+          result: null,
+          hasTranscript: true,
+        },
+      ],
+    );
+    return cell;
+  }
+
+  const parent = [dispatchCell('aaa', 'c1')];
+  const child = cellsOf([
+    event({ seq: 1, eventType: 'user-message', content: 'inside', turn: 1, step: 0 }),
+    event({ seq: 2, eventType: 'assistant-message', content: 'done', turn: 1, step: 0 }),
+  ]);
+
+  it('splices a transcript below its dispatch row, one level deeper', () => {
+    const rows = groupVirtualRows(
+      parent,
+      new Map([['aaa', child]]),
+      new Set(['aaa']),
+    );
+    expect(rows.map((r) => r.depth)).toEqual([0, 1, 1]);
+    expect(rows[1].entries[0].cell.text).toBe('inside');
+  });
+
+  it('hides the transcript while collapsed', () => {
+    const rows = groupVirtualRows(parent, new Map([['aaa', child]]), new Set());
+    expect(rows).toHaveLength(1);
+  });
+
+  it('keeps rows unique so React cannot reuse them', () => {
+    const rows = groupVirtualRows(parent, new Map([['aaa', child]]), new Set(['aaa']));
+    expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
+  });
+
+  it('expands nested dispatches recursively', () => {
+    const nested = [dispatchCell('bbb', 'c2')];
+    const grandchild = cellsOf([event({ seq: 1, eventType: 'user-message', content: 'deep' })]);
+
+    const rows = groupVirtualRows(
+      parent,
+      new Map([
+        ['aaa', nested],
+        ['bbb', grandchild],
+      ]),
+      new Set(['aaa', 'bbb']),
+    );
+    expect(rows.map((r) => r.depth)).toEqual([0, 1, 2]);
+    expect(rows[2].entries[0].cell.text).toBe('deep');
+  });
+
+  it('ignores an expanded agent with no loaded transcript', () => {
+    const rows = groupVirtualRows(parent, new Map(), new Set(['aaa']));
+    expect(rows).toHaveLength(1);
   });
 });
 

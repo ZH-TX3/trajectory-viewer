@@ -10,6 +10,10 @@ pub struct TrajectoryData {
     pub provider_id: String,
     pub events: Vec<TrajectoryEvent>,
     pub metadata: TrajectoryMetadata,
+    /// Subagents this session dispatched. Empty for providers without them and
+    /// for sessions that never spawned one; the runs' own transcripts load on
+    /// demand via `parse_subagent_trajectory`.
+    pub subagents: Vec<subagent::SubagentRun>,
 }
 
 /// Session-level trajectory metadata.
@@ -72,6 +76,7 @@ pub struct ContentBlock {
 }
 
 pub mod parser;
+pub mod subagent;
 pub mod utils;
 
 use std::path::Path;
@@ -236,6 +241,30 @@ pub fn parse_trajectory(provider_id: &str, source_path: &str) -> Result<Trajecto
         }
     };
 
+    // Only Claude stores subagent transcripts, and only beside a session file
+    // (a bare file dropped on the app has no such neighbours).
+    let subagents = if provider_id == "claude" {
+        subagent::scan(path)
+    } else {
+        Vec::new()
+    };
+
+    Ok(build_trajectory_data(
+        provider_id,
+        session_id,
+        events,
+        subagents,
+    ))
+}
+
+/// Assemble parsed events plus their subagent runs into the frontend payload,
+/// deriving the session-level totals.
+pub fn build_trajectory_data(
+    provider_id: &str,
+    session_id: String,
+    events: Vec<TrajectoryEvent>,
+    subagents: Vec<subagent::SubagentRun>,
+) -> TrajectoryData {
     let mut total_input_tokens: Option<i64> = None;
     let mut total_output_tokens: Option<i64> = None;
     let mut first_ts: Option<i64> = None;
@@ -266,7 +295,7 @@ pub fn parse_trajectory(provider_id: &str, source_path: &str) -> Result<Trajecto
 
     let event_count = events.len();
 
-    Ok(TrajectoryData {
+    TrajectoryData {
         session_id,
         provider_id: provider_id.to_string(),
         events,
@@ -277,5 +306,6 @@ pub fn parse_trajectory(provider_id: &str, source_path: &str) -> Result<Trajecto
             total_duration_ms,
             event_count,
         },
-    })
+        subagents,
+    }
 }

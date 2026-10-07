@@ -279,7 +279,12 @@ fn push_user_events(
     // Only a real user text message starts a new turn. Tool-result-only
     // user lines continue the current assistant turn/step.
     let has_user_text = !user_texts.is_empty();
-    if has_user_text {
+    // Injected context arrives as a `user` line but is not user input: system
+    // reminders and subagent task notifications. Counting them as turns split
+    // one assistant turn into several — every background subagent's result
+    // started a phantom turn of its own.
+    let is_injected = user_texts.iter().any(|text| is_injected_context(text));
+    if has_user_text && !is_injected {
         *current_turn += 1;
         *current_step = 0;
     }
@@ -507,6 +512,13 @@ fn push_assistant_events(
 }
 
 // ── Text extraction helpers ───────────────────────────────────────────────
+
+/// Whether a `user` line is injected context rather than user input. Claude
+/// writes workspace/system reminders and subagent task notifications this way;
+/// neither starts a turn.
+fn is_injected_context(text: &str) -> bool {
+    text.contains("<system-reminder>") || text.contains("<task-notification>")
+}
 
 fn extract_text_content(msg: &Value) -> String {
     if let Some(text) = msg.as_str() {
@@ -817,6 +829,49 @@ mod tests {
 
     // Session logs are appended incrementally, so a crashed run leaves a
     // truncated last line. That must not sink the whole session.
+    // A task notification arrives as a `user` line. Counting it as user input
+    // gave every background subagent's result a phantom turn of its own,
+    // splitting one assistant turn into several.
+    #[test]
+    fn parse_task_notification_does_not_start_a_turn() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-n\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"go\"},\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Agent\",\"input\":{\"description\":\"x\"}}]},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<task-notification>\\n<task-id>a</task-id>\\n<status>completed</status>\\n<result>done</result>\\n</task-notification>\"},\"timestamp\":\"2026-03-06T10:05:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"wrapped up\"},\"timestamp\":\"2026-03-06T10:06:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        let notification = events
+            .iter()
+            .find(|e| {
+                e.content
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("<task-notification>")
+            })
+            .expect("notification event");
+        // The notification stays inside turn 1 — it opened no turn of its own.
+        assert_eq!(notification.turn, Some(1));
+        assert_eq!(notification.event_type, "user-message");
+
+        let after = events
+            .iter()
+            .find(|e| e.content.as_deref() == Some("wrapped up"))
+            .expect("trailing assistant event");
+        assert_eq!(after.turn, Some(1));
+
+        // And the real user message still opens turn 1.
+        assert_eq!(events[0].turn, Some(1));
+    }
+
     #[test]
     fn parse_skips_malformed_lines() {
         let dir = tempdir().unwrap();

@@ -10,7 +10,9 @@ import {
   formatRecordedTime,
   formatThroughput,
   formatTokenCount,
+  isTaskNotification,
   KIND_LABEL,
+  parseTaskNotification,
   trajectoryPreviewText,
 } from './format';
 
@@ -86,5 +88,82 @@ describe('KIND_LABEL', () => {
     for (const kind of ['system', 'user', 'context', 'compacted', 'message', 'tool', 'subtool']) {
       expect(KIND_LABEL[kind]).toBeTruthy();
     }
+  });
+});
+
+describe('task notifications', () => {
+  /** Shaped like a real one, including the fields we ignore. */
+  const body = [
+    '<task-notification>',
+    '<task-id>a8c033ed71a2c7f0c</task-id>',
+    '<tool-use-id>call_02_sKDlt6Cw6mIoULaXUw0p3943</tool-use-id>',
+    '<output-file>C:\\Temp\\tasks\\a8c0.output</output-file>',
+    '<status>completed</status>',
+    '<summary>Agent "collect red outfits" finished</summary>',
+    '<note>A task-notification fires each time this agent stops.</note>',
+    '<result>Collected 8 posts. Files verified.</result>',
+    '</task-notification>',
+  ].join('\n');
+
+  it('recognizes a notification, including with leading whitespace', () => {
+    expect(isTaskNotification(body)).toBe(true);
+    expect(isTaskNotification(`\n  ${body}`)).toBe(true);
+  });
+
+  it('does not treat ordinary text as one', () => {
+    expect(isTaskNotification('hello')).toBe(false);
+    expect(isTaskNotification('')).toBe(false);
+    expect(isTaskNotification(null)).toBe(false);
+    expect(isTaskNotification(undefined)).toBe(false);
+  });
+
+  it('extracts the fields worth showing', () => {
+    const parsed = parseTaskNotification(body);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.agentId).toBe('a8c033ed71a2c7f0c');
+    expect(parsed?.status).toBe('completed');
+    expect(parsed?.summary).toBe('Agent "collect red outfits" finished');
+    expect(parsed?.result).toBe('Collected 8 posts. Files verified.');
+    expect(parsed?.isError).toBe(false);
+  });
+
+  // A multi-line result must survive intact — the closing tag is what ends it.
+  it('keeps a multi-line result', () => {
+    const multiline = `<task-notification>\n<status>completed</status>\n<result>line one\nline two\n\nline three</result>\n</task-notification>`;
+    expect(parseTaskNotification(multiline)?.result).toBe('line one\nline two\n\nline three');
+  });
+
+  it('flags failed and killed runs as errors', () => {
+    const failed = body.replace('<status>completed</status>', '<status>failed</status>');
+    const killed = body.replace('<status>completed</status>', '<status>killed</status>');
+    expect(parseTaskNotification(failed)?.isError).toBe(true);
+    expect(parseTaskNotification(killed)?.isError).toBe(true);
+  });
+
+  // A background run can be stopped or still going; neither is a failure.
+  it('does not flag stopped or running runs as errors', () => {
+    const stopped = body.replace('<status>completed</status>', '<status>stopped</status>');
+    expect(parseTaskNotification(stopped)?.isError).toBe(false);
+  });
+
+  it('returns null fields when a tag is missing', () => {
+    const bare = '<task-notification>\n<task-id>abc</task-id>\n</task-notification>';
+    const parsed = parseTaskNotification(bare);
+    expect(parsed?.agentId).toBe('abc');
+    expect(parsed?.status).toBeNull();
+    expect(parsed?.result).toBeNull();
+    expect(parsed?.summary).toBeNull();
+  });
+
+  // A truncated notification (killed mid-write) has an opening tag but no
+  // closing one; the field must come back null rather than swallowing the rest.
+  it('handles an unterminated notification', () => {
+    const truncated = '<task-notification>\n<status>completed</status>\n<result>partial…';
+    expect(parseTaskNotification(truncated)?.result).toBeNull();
+    expect(parseTaskNotification(truncated)?.status).toBe('completed');
+  });
+
+  it('returns null for text that is not a notification', () => {
+    expect(parseTaskNotification('just text')).toBeNull();
   });
 });

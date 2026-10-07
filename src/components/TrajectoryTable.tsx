@@ -9,6 +9,7 @@ import { TrajectoryCell } from './TrajectoryCell';
 import { TrajectoryDetail } from './TrajectoryDetail';
 import type { TrajectoryCellProps, TrajectoryTurnModel } from '../utils/layout';
 import { aggregateRequestDetail, groupVirtualRows, summarizeTurnText } from '../utils/layout';
+import type { SubagentRun } from '../types';
 
 /** Build the collapsed-turn summary row (DSH collapsedSummaryKind "turn"). */
 function buildTurnSummary(
@@ -43,6 +44,13 @@ interface TrajectoryTableProps {
   _onToggleTurn?: (turn: number) => void;
   _collapsedAssistants?: ReadonlySet<string>;
   _onToggleAssistant?: (id: string) => void;
+  /** Loaded subagent transcripts, keyed by agent id, spliced in when expanded. */
+  transcripts?: ReadonlyMap<string, readonly TrajectoryCellProps[]>;
+  expandedAgents?: ReadonlySet<string>;
+  /** Agents whose transcript is being fetched right now. */
+  pendingAgents?: ReadonlySet<string>;
+  onToggleExpand?: (run: SubagentRun) => void;
+  onOpenSubagent?: (run: SubagentRun) => void;
 }
 
 export function TrajectoryTable({
@@ -54,6 +62,11 @@ export function TrajectoryTable({
   selectedIndex = null,
   _collapsedAssistants = undefined,
   _onToggleTurn,
+  transcripts = new Map(),
+  expandedAgents = new Set(),
+  pendingAgents = new Set(),
+  onToggleExpand,
+  onOpenSubagent,
 }: TrajectoryTableProps) {
   const tablePaneRef = useRef<HTMLDivElement>(null);
   const [selectedRecord, setSelectedRecord] = useState<TrajectoryCellProps | null>(null);
@@ -177,8 +190,12 @@ export function TrajectoryTable({
     return records;
   }, [allRecords, searchMatchIndexes, collapsedTurns, _collapsedAssistants, groupKeyByIndex]);
 
-  // Virtual rows
-  const virtualRows = useMemo(() => groupVirtualRows(filteredRecords), [filteredRecords]);
+  // Virtual rows. Expanded dispatch rows splice in their transcript's cells,
+  // which is why this depends on the transcripts and the expanded set too.
+  const virtualRows = useMemo(
+    () => groupVirtualRows(filteredRecords, transcripts, expandedAgents),
+    [filteredRecords, transcripts, expandedAgents],
+  );
 
   const rowVirtualizer = useVirtualizer({
     count: virtualRows.length,
@@ -296,26 +313,46 @@ export function TrajectoryTable({
                             <col />
                           </colgroup>
                           <tbody>
-                            {row.entries.map((entry) => (
-                              <TrajectoryCell
-                                key={entry.cell.index}
-                                {...entry.cell}
-                                turnStart={rowMetaByIndex.get(entry.cell.index)?.turnStart}
-                                activeTurn={entry.cell.turn != null && entry.cell.turn === activeTurn}
-                                requestNumber={requestStartByIndex.get(entry.cell.index)?.number}
-                                selected={selectedRecord?.index === entry.cell.index}
-                                searchMatch={searchMatchIndexes?.has(entry.cell.index)}
-                                timelineFocus={
-                                  timelineFocusIndexes === null || timelineFocusIndexes.size === 0
-                                    ? undefined
-                                    : timelineFocusIndexes.has(entry.cell.index)
-                                      ? 'inside'
-                                      : 'outside'
-                                }
-                                onClick={() => handleRecordClick(entry.cell)}
-                                onDoubleClickTurn={_onToggleTurn}
-                              />
-                            ))}
+                            {row.entries.map((entry) => {
+                              const run = entry.cell.subagentRun;
+                              const agentId = run?.agentId;
+                              const canExpand =
+                                agentId != null &&
+                                entry.cell.kind === 'subtool' &&
+                                run?.hasTranscript === true &&
+                                onToggleExpand !== undefined;
+                              return (
+                                <TrajectoryCell
+                                  key={entry.cell.index}
+                                  {...entry.cell}
+                                  depth={row.depth}
+                                  turnStart={rowMetaByIndex.get(entry.cell.index)?.turnStart}
+                                  activeTurn={entry.cell.turn != null && entry.cell.turn === activeTurn}
+                                  requestNumber={requestStartByIndex.get(entry.cell.index)?.number}
+                                  selected={selectedRecord?.index === entry.cell.index}
+                                  searchMatch={searchMatchIndexes?.has(entry.cell.index)}
+                                  expanded={agentId != null && expandedAgents.has(agentId)}
+                                  expandPending={agentId != null && pendingAgents.has(agentId)}
+                                  onToggleExpand={
+                                    canExpand ? () => onToggleExpand(run) : undefined
+                                  }
+                                  onOpenSubagent={
+                                    run != null && run.hasTranscript && onOpenSubagent !== undefined
+                                      ? () => onOpenSubagent(run)
+                                      : undefined
+                                  }
+                                  timelineFocus={
+                                    timelineFocusIndexes === null || timelineFocusIndexes.size === 0
+                                      ? undefined
+                                      : timelineFocusIndexes.has(entry.cell.index)
+                                        ? 'inside'
+                                        : 'outside'
+                                  }
+                                  onClick={() => handleRecordClick(entry.cell)}
+                                  onDoubleClickTurn={_onToggleTurn}
+                                />
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>

@@ -9,8 +9,10 @@ import { api } from '../api';
 import { TrajectoryView } from './TrajectoryView';
 import { TrajectoryErrorBoundary } from './TrajectoryErrorBoundary';
 import { SidebarSearch } from './SidebarSearch';
+import { SubagentCard } from './SubagentCard';
 import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import { cn } from '../lib/utils';
+import { isTaskNotification, parseTaskNotification } from '../utils/format';
 import {
   ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware,
 } from './icons/BrandIcons';
@@ -45,7 +47,70 @@ function resumeCommandFor(session: SessionMeta | null): string {
 /** Longer message content (especially tool output) shows collapsed by default. */
 const MESSAGE_COLLAPSE_CHARS = 500;
 
+/**
+ * A subagent result arrives as a `<task-notification>` XML blob. Shown raw it
+ * is 2–3KB of tags and file paths, so it is summarized to what the reader
+ * wants: which agent finished, how, and what it reported.
+ */
+function TaskNotificationCard({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const notification = parseTaskNotification(text);
+  if (notification === null) return null;
+  const { agentId, status, summary, result, isError } = notification;
+
+  return (
+    <div className="rounded border border-border/50 bg-muted/40 px-2 py-1.5">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] font-mono bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300">
+          {agentId ?? 'subagent'}
+        </span>
+        {status !== null && (
+          <span
+            className={cn(
+              'shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] font-mono',
+              isError
+                ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                : 'bg-muted text-muted-foreground',
+            )}
+          >
+            {status}
+          </span>
+        )}
+        <span className="text-xs text-foreground/80 truncate min-w-0">
+          {summary ?? 'Subagent finished'}
+        </span>
+      </div>
+
+      {result !== null && (
+        <>
+          <div
+            className={cn(
+              'mt-1 text-xs text-foreground/70 whitespace-pre-wrap break-words leading-relaxed',
+              !expanded && 'line-clamp-3',
+            )}
+          >
+            {result}
+          </div>
+          {result.length > 160 && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1 text-[10px] text-blue-600 dark:text-blue-400 hover:underline transition-colors"
+            >
+              {expanded ? 'Show less' : `Show result (${result.length.toLocaleString()} chars)`}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function MessageContent({ text }: { text: string }) {
+  // A task notification is structured payload, not prose — render it as a card
+  // instead of dumping its XML.
+  if (isTaskNotification(text)) {
+    return <TaskNotificationCard text={text} />;
+  }
   const [expanded, setExpanded] = useState(false);
   // Collapse when the text is too long OR spills past 3 lines (common for tool
   // file dumps), so a short-but-multi-line block is still previewed compactly.
@@ -834,25 +899,45 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                   <div className="text-xs text-muted-foreground text-center pt-8">No messages</div>
                 ) : (
                   messages.map((msg, i) => {
-                    // Injected workspace/system reminders are user-role payloads;
-                    // surface them as "system" like DSH does.
-                    const role =
-                      msg.role === 'user' && msg.content.includes('<system-reminder>')
-                        ? 'system'
-                        : msg.role;
+                    // Injected context arrives as a user-role payload: workspace
+                    // reminders and subagent task notifications. Surface both as
+                    // "system" like DSH does, so they don't read as user input.
+                    const injected =
+                      msg.role === 'user' &&
+                      (msg.content.includes('<system-reminder>') ||
+                        isTaskNotification(msg.content));
+                    // A dispatch row is its own kind, like Trajectory's SUBAGENT.
+                    const isDispatch = msg.subagents != null && msg.subagents.length > 0;
+                    const role = injected ? 'system' : isDispatch ? 'subagent' : msg.role;
+                    const label = isTaskNotification(msg.content) ? 'subagent' : role;
                     return (
                     <div key={i} className="flex gap-3">
                       <div className={`
                         shrink-0 w-16 text-[10px] font-mono text-right pt-1
                         ${role === 'system' ? 'text-cyan-600 dark:text-cyan-400' : ''}
+                        ${role === 'subagent' ? 'text-cyan-600 dark:text-cyan-400' : ''}
                         ${role === 'user' ? 'text-emerald-600 dark:text-emerald-400' : ''}
                         ${role === 'assistant' ? 'text-violet-600 dark:text-violet-400' : ''}
                         ${role === 'tool' ? 'text-amber-600 dark:text-amber-400' : ''}
                       `}>
-                        {role}
+                        {label}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <MessageContent text={msg.content} />
+                        {msg.subagents != null && msg.subagents.length > 0 ? (
+                          // A dispatch line carries no prose of its own; the
+                          // card replaces the bare `[Tool: Agent]` text.
+                          <div className="space-y-1">
+                            {msg.subagents.map((run) => (
+                              <SubagentCard
+                                key={run.agentId}
+                                run={run}
+                                sourcePath={selectedSession?.sourcePath}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <MessageContent text={msg.content} />
+                        )}
                         {msg.ts && (
                           <div className="text-[10px] text-muted-foreground/50 mt-1">{formatTime(msg.ts)}</div>
                         )}
@@ -873,7 +958,11 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                   </div>
                 ) : trajectoryData ? (
                   <TrajectoryErrorBoundary>
-                    <TrajectoryView data={trajectoryData} focusTs={focusTs} />
+                    <TrajectoryView
+                      data={trajectoryData}
+                      focusTs={focusTs}
+                      sourcePath={selectedSession?.sourcePath}
+                    />
                   </TrajectoryErrorBoundary>
                 ) : (
                   <div className="flex items-center justify-center h-20 text-xs text-muted-foreground">

@@ -194,7 +194,7 @@ export function App() {
         )}
 
         {mode === 'file' && trajectoryData && (
-          <TrajectoryView data={trajectoryData} />
+          <TrajectoryView data={trajectoryData} sourcePath={sourcePath} />
         )}
 
         {mode === 'file' && !trajectoryData && (

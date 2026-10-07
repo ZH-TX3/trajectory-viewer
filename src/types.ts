@@ -5,6 +5,53 @@ export interface TrajectoryData {
   providerId: string;
   events: TrajectoryEvent[];
   metadata: TrajectoryMetadata;
+  /** Subagents this session dispatched (Claude only; empty elsewhere). */
+  subagents: SubagentRun[];
+}
+
+// ── Subagents ────────────────────────────────────────────────────────────
+
+export interface SubagentUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+}
+
+export interface SubagentStats {
+  readCount: number;
+  searchCount: number;
+  bashCount: number;
+  editFileCount: number;
+  linesAdded: number;
+  linesRemoved: number;
+  otherToolCount: number;
+}
+
+/** One dispatched subagent, as recorded beside the main session. */
+export interface SubagentRun {
+  agentId: string;
+  toolCallId: string | null;
+  agentType: string | null;
+  description: string | null;
+  name: string | null;
+  spawnDepth: number;
+  parentAgentId: string | null;
+  isFork: boolean;
+  stoppedByUser: boolean;
+  model: string | null;
+  worktreePath: string | null;
+  worktreeBranch: string | null;
+  /** completed | failed | stopped | killed | async_launched | forked */
+  status: string | null;
+  durationMs: number | null;
+  totalTokens: number | null;
+  toolUseCount: number | null;
+  usage: SubagentUsage | null;
+  stats: SubagentStats | null;
+  result: string | null;
+  /** Whether a transcript exists to drill into. */
+  hasTranscript: boolean;
 }
 
 export interface TrajectoryMetadata {
@@ -76,6 +123,9 @@ export interface SessionMessage {
   role: string;
   content: string;
   ts?: number | null;
+  /** Subagents this message dispatched (Claude only; absent elsewhere). One
+   *  assistant message can hold several `Agent` calls. */
+  subagents?: SubagentRun[];
 }
 
 // ── Backup & Restore Types ───────────────────────────────────────────────

@@ -953,6 +953,7 @@ pub fn load_messages(source: &str) -> Result<Vec<SessionMessage>, String> {
                 role: m.role,
                 content,
                 ts: if m.created > 0 { Some(m.created) } else { None },
+                ..Default::default()
             }
         })
         .filter(|m| !m.content.trim().is_empty())
@@ -973,6 +974,7 @@ fn load_messages_from_db_as_session(
                 role: m.role,
                 content,
                 ts: Some(m.created),
+                ..Default::default()
             }
         })
         .filter(|m| !m.content.trim().is_empty())

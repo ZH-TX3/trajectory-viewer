@@ -123,6 +123,7 @@ impl SessionProvider for DshProvider {
                     role: role.to_string(),
                     content,
                     ts,
+                    ..Default::default()
                 });
             }
         }

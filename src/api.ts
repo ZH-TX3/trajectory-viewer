@@ -39,6 +39,25 @@ export const api = {
     return await invoke('get_session_trajectory', { providerId, sourcePath });
   },
 
+  /**
+   * Load one subagent's own trajectory. `sourcePath` is the MAIN session file;
+   * Claude keeps each run's transcript in a `subagents/` directory beside it.
+   */
+  async getSubagentTrajectory(
+    sourcePath: string,
+    agentId: string,
+  ): Promise<TrajectoryData> {
+    return await invoke('get_subagent_trajectory', { sourcePath, agentId });
+  },
+
+  /** Load one subagent's own conversation, for the Messages tab. */
+  async getSubagentMessages(
+    sourcePath: string,
+    agentId: string,
+  ): Promise<SessionMessage[]> {
+    return await invoke('get_subagent_messages', { sourcePath, agentId });
+  },
+
   /** List all sessions (Claude Code + Codex). */
   async listSessions(): Promise<SessionMeta[]> {
     return await invoke('list_sessions');

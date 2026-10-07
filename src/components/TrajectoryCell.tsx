@@ -4,7 +4,8 @@
 
 import React from 'react';
 import type { TrajectoryCellProps } from '../utils/layout';
-import { KIND_LABEL } from '../utils/format';
+import type { SubagentRun } from '../types';
+import { formatDurationMs, formatTokenCount, KIND_LABEL } from '../utils/format';
 import { cn } from '../lib/utils';
 
 // ── Inline SVG Icons ──────────────────────────────────────────────────────
@@ -102,6 +103,34 @@ interface TrajectoryCellPropsExtra extends TrajectoryCellProps {
   activeTurn?: boolean;
   /** This row is the start of a request/step — draws the request dot. */
   requestNumber?: number;
+  /** Subagent transcript is expanded inline below this row. */
+  expanded?: boolean;
+  /** Transcript is being fetched right now. */
+  expandPending?: boolean;
+  /** Toggle the inline transcript; only passed for rows that have one. */
+  onToggleExpand?: () => void;
+  /** Drill into the subagent's own full view. */
+  onOpenSubagent?: () => void;
+  /** Nesting level inside a subagent transcript — indents the row. */
+  depth?: number;
+}
+
+/** Compact one-line cost summary for a dispatch row: tools · tokens · time. */
+function subagentCostSummary(run: SubagentRun): string {
+  const parts: string[] = [];
+  if (run.toolUseCount != null) parts.push(`${run.toolUseCount} tools`);
+  else if (run.stats != null) {
+    const total =
+      run.stats.readCount +
+      run.stats.searchCount +
+      run.stats.bashCount +
+      run.stats.editFileCount +
+      run.stats.otherToolCount;
+    if (total > 0) parts.push(`${total} tools`);
+  }
+  if (run.totalTokens != null) parts.push(`${formatTokenCount(run.totalTokens)} tok`);
+  if (run.durationMs != null) parts.push(formatDurationMs(run.durationMs));
+  return parts.join(' · ');
 }
 
 export function TrajectoryCell({
@@ -116,6 +145,7 @@ export function TrajectoryCell({
   toolName,
   subagentType,
   subagentBackground,
+  subagentRun,
   opensTurn,
   onClick,
   onDoubleClickTurn,
@@ -125,11 +155,19 @@ export function TrajectoryCell({
   turnStart = false,
   activeTurn = false,
   requestNumber,
+  expanded = false,
+  expandPending = false,
+  onToggleExpand,
+  onOpenSubagent,
+  depth = 0,
 }: TrajectoryCellPropsExtra) {
   const label = KIND_LABEL[kind] ?? kind.toUpperCase();
   const icon = KIND_ICON[kind];
   const colorClass = KIND_COLOR[kind] ?? 'text-gray-500';
   const isSummary = recordId?.startsWith('summary-turn-') === true;
+  const cost = subagentRun != null ? subagentCostSummary(subagentRun) : '';
+  const nested = subagentRun != null && subagentRun.spawnDepth > 1;
+  const inWorktree = subagentRun?.worktreeBranch != null;
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     if (isSummary || !turnStart || turn == null || onDoubleClickTurn === undefined) return;
@@ -159,6 +197,16 @@ export function TrajectoryCell({
         {activeTurn && (
           <span className="absolute left-0 top-0 bottom-0 w-[2px] bg-blue-400/25 rounded-r pointer-events-none" />
         )}
+        {/* Nested-transcript rail: a vertical guide per indent level. */}
+        {depth > 0 &&
+          Array.from({ length: depth }, (_, level) => (
+            <span
+              key={level}
+              className="absolute top-0 bottom-0 w-px bg-cyan-500/30 pointer-events-none"
+              style={{ left: 8 + level * 12 }}
+              aria-hidden
+            />
+          ))}
         {turnStart && turn != null && (
           <span className="absolute left-2 top-[1px] text-[8px] font-mono text-muted-foreground/60 leading-none pointer-events-none">
             T{turn}
@@ -188,11 +236,68 @@ export function TrajectoryCell({
       </td>
 
       {/* Content column */}
-      <td className="py-0.5 px-2 align-middle min-w-0">
+      <td className="py-0.5 px-2 align-middle min-w-0" style={depth > 0 ? { paddingLeft: 8 + depth * 12 } : undefined}>
         <div className="flex items-center gap-2 min-w-0">
+          {kind === 'subtool' && onToggleExpand !== undefined && (
+            <button
+              type="button"
+              title={expanded ? 'Collapse subagent transcript' : 'Expand subagent transcript'}
+              aria-expanded={expanded}
+              disabled={expandPending}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleExpand();
+              }}
+              className={cn(
+                'shrink-0 -ml-0.5 px-0.5 leading-none text-cyan-600 dark:text-cyan-400',
+                expandPending
+                  ? 'opacity-50 cursor-wait'
+                  : 'hover:text-cyan-800 dark:hover:text-cyan-200',
+              )}
+            >
+              {expandPending ? '⋯' : expanded ? '▾' : '▸'}
+            </button>
+          )}
+
           {kind === 'subtool' && (
             <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] font-mono bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300">
               {subagentType ?? toolName ?? 'Agent'}
+            </span>
+          )}
+
+          {nested && (
+            <span
+              title={`Nested subagent — spawn depth ${subagentRun?.spawnDepth}`}
+              className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground"
+            >
+              d{subagentRun?.spawnDepth}
+            </span>
+          )}
+
+          {inWorktree && (
+            <span
+              title={`Isolated worktree: ${subagentRun?.worktreePath ?? ''} (${subagentRun?.worktreeBranch ?? ''})`}
+              className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] font-mono bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300"
+            >
+              ⎇
+            </span>
+          )}
+
+          {subagentRun?.isFork === true && (
+            <span
+              title="Forked from the parent conversation"
+              className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-muted text-muted-foreground"
+            >
+              fork
+            </span>
+          )}
+
+          {subagentRun?.stoppedByUser === true && (
+            <span
+              title="Stopped by the user"
+              className="shrink-0 inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300"
+            >
+              ⏹
             </span>
           )}
 
@@ -215,14 +320,37 @@ export function TrajectoryCell({
             {text}
           </span>
 
-          {(result || resultPreviewMarkdown) && (
+          {cost !== '' && (
+            <span className="shrink-0 text-[10px] text-muted-foreground font-mono truncate ml-auto">
+              {cost}
+            </span>
+          )}
+
+          {cost === '' && (result || resultPreviewMarkdown) && (
             <span className="shrink-0 text-[10px] text-muted-foreground truncate max-w-[200px] ml-auto">
               → {resultPreviewMarkdown ?? result}
             </span>
           )}
 
+          {kind === 'subtool' && onOpenSubagent !== undefined && (
+            <button
+              type="button"
+              title="Open this subagent's full trajectory"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenSubagent();
+              }}
+              className={cn(
+                'shrink-0 px-1 py-0.5 rounded text-[10px] border border-cyan-300/60 dark:border-cyan-700/60 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900/40',
+                cost === '' && 'ml-auto',
+              )}
+            >
+              open →
+            </button>
+          )}
+
           {timeSeconds != null && (
-            <span className="shrink-0 text-[10px] text-muted-foreground font-mono ml-auto">
+            <span className={cn('shrink-0 text-[10px] text-muted-foreground font-mono', cost === '' && 'ml-auto')}>
               {timeSeconds >= 1
                 ? `${timeSeconds.toFixed(1)}s`
                 : `${Math.round(timeSeconds * 1000)}ms`}

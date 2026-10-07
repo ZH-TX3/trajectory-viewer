@@ -16,6 +16,33 @@ pub fn get_session_trajectory(
     trajectory::parse_trajectory(&provider_id, &source_path)
 }
 
+/// Load one subagent's own trajectory.
+///
+/// `source_path` is the MAIN session file; Claude keeps every run's transcript
+/// in a `subagents/` directory beside it, so no extra path is needed.
+#[tauri::command]
+pub fn get_subagent_trajectory(
+    source_path: String,
+    agent_id: String,
+) -> Result<trajectory::TrajectoryData, String> {
+    trajectory::subagent::parse_subagent_trajectory(std::path::Path::new(&source_path), &agent_id)
+}
+
+/// Load one subagent's own conversation, for the Messages tab.
+///
+/// A subagent transcript is the same format as the session that spawned it,
+/// so this reuses the Claude message loader. Runs are resolved against the
+/// MAIN session, since that is where every transcript's meta lives.
+#[tauri::command]
+pub fn get_subagent_messages(
+    source_path: String,
+    agent_id: String,
+) -> Result<Vec<session_manager::SessionMessage>, String> {
+    let session = std::path::Path::new(&source_path);
+    let transcript = trajectory::subagent::transcript_path(session, &agent_id)?;
+    session_manager::load_claude_messages_with_runs(&transcript, session)
+}
+
 #[tauri::command]
 pub fn list_sessions() -> Result<Vec<session_manager::SessionMeta>, String> {
     Ok(session_manager::scan_sessions())

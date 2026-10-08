@@ -13,6 +13,7 @@ import { SubagentCard } from './SubagentCard';
 import type { ProviderCommand, SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import { cn } from '../lib/utils';
 import { isTaskNotification, parseTaskNotification, resumeCommandText } from '../utils/format';
+import { remapWheelToHorizontal } from '../utils/scroll';
 import {
   ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware,
 } from './icons/BrandIcons';
@@ -653,17 +654,26 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   const chipIdCount = (id: string) =>
     id === 'claude' ? claudeCount : id === 'codex' ? codexCount : id === 'dsh' ? dshCount : opencodeCount;
 
-  // The provider filter bar scrolls horizontally when it overflows; remap the
-  // vertical wheel into horizontal scrolling there (like a scroll-tab bar).
+  // The provider filter bar scrolls horizontally when it overflows; a vertical
+  // wheel is remapped onto it, the way a scrollable tab strip behaves.
   const filterBarRef = useRef<HTMLDivElement>(null);
+  const filterWheelPending = useRef(0);
   useEffect(() => {
     const el = filterBarRef.current;
     if (el === null) return;
     const onWheel = (event: WheelEvent) => {
-      if (el.scrollWidth > el.clientWidth) {
-        event.preventDefault();
-        el.scrollLeft += event.deltaY;
-      }
+      if (el.scrollWidth <= el.clientWidth) return;
+      const { scrollBy, pending } = remapWheelToHorizontal(
+        event,
+        filterWheelPending.current,
+        el.clientWidth,
+      );
+      filterWheelPending.current = pending;
+      // `null` means "this is a horizontal gesture" — let the browser pan it so
+      // macOS momentum survives.
+      if (scrollBy === null) return;
+      event.preventDefault();
+      el.scrollLeft += scrollBy;
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -676,9 +686,26 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
         className="border-r border-border/40 bg-muted/20 flex flex-col shrink-0 overflow-hidden"
         style={{ width: sidebarWidth }}
       >
-        {/* Provider filter icons */}
-        <div className="relative border-b border-border/40">
-          <div ref={filterBarRef} className="flex items-center gap-1 px-2 py-1.5 overflow-x-auto pr-9">
+        {/* Provider filter icons — a fixed header strip, not a sticky one: the
+            list below is its own scroll container, so nothing ever passes
+            underneath and `backdrop-blur` here would have nothing to blur. The
+            separation has to come from the surface itself.
+
+            The surface is written as an arbitrary value rather than
+            `bg-background`: the palette names in `styles.css` are not part of
+            Tailwind's default scale and the config does not extend it, so every
+            `bg-muted/20`, `bg-background`, … utility is dropped from the build.
+            That is why this strip used to sit flush against the list — both
+            ended up transparent. */}
+        <div className="relative z-10 border-b border-[hsl(var(--border)/0.4)] bg-[hsl(var(--background))] shadow-sm shrink-0">
+          <div
+            ref={filterBarRef}
+            className="flex items-center gap-1 px-2 py-1.5 overflow-x-auto pr-9"
+            // Touch devices pan the strip themselves; without this the browser
+            // waits to see whether a horizontal drag is a scroll or a page
+            // gesture, which reads as lag on a trackpad.
+            style={{ touchAction: 'pan-x' }}
+          >
             {orderedChips.filter((chip) => enabledProviders.has(chip.id)).map((chip) => (
               <button
                 key={chip.id}
@@ -686,7 +713,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                 className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
                   providerFilter === chip.id
                     ? chip.active
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                    : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted)/0.4)]'
                 }`}
               >
                 <chip.icon className="size-3.5" />
@@ -696,11 +723,14 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
             ))}
           </div>
           {/* Floating refresh — a sibling of the scroll container, so it is
-              pinned to the visible right edge and never scrolls with the chips. */}
+              pinned to the visible right edge and never scrolls with the chips.
+              It genuinely floats over them, so `backdrop-blur` earns its keep
+              here; the near-opaque background keeps a chip from reading
+              through it while it passes underneath. */}
           <button
             onClick={refreshAll}
             title="Refresh sessions"
-            className="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 bg-muted/80 shadow-sm backdrop-blur-sm transition-colors"
+            className="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded-md border border-[hsl(var(--border)/0.6)] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted)/0.6)] bg-[hsl(var(--background)/0.95)] shadow-sm backdrop-blur-md transition-colors"
           >
             <RotateCw className="size-3.5" />
           </button>

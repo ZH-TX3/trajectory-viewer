@@ -26,6 +26,7 @@ import type {
   ResumeOutcome,
   ResumeSettings,
   ProviderCommand,
+  TerminalStatus,
 } from './types';
 
 export const api = {
@@ -162,6 +163,11 @@ export const api = {
   /** Every provider's effective resume command and how it resolves. */
   async resumeCommandStatuses(): Promise<ProviderCommand[]> {
     return await invoke('resume_command_statuses');
+  },
+
+  /** Every terminal the launcher can open, and which are installed here. */
+  async resumeTerminals(): Promise<TerminalStatus[]> {
+    return await invoke('resume_terminals');
   },
 
   /** Current resume launcher preferences. */

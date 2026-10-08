@@ -246,15 +246,31 @@ pub fn resume_session_in_terminal(
 
 /// Whether a provider's configured resume command can actually be started.
 #[tauri::command]
-pub fn resume_command_available(provider_id: String) -> bool {
-    let command = crate::resume::get_settings().command_for(&provider_id);
-    crate::resume::command_available(&command)
+pub async fn resume_command_available(provider_id: String) -> bool {
+    // Resolving an alias shells out, so this is offloaded rather than run on the
+    // main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let command = crate::resume::get_settings().command_for(&provider_id);
+        crate::resume::command_available(&command)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// How every provider's resume command resolves (program / alias / missing).
 #[tauri::command]
-pub fn resume_command_statuses() -> Vec<crate::resume::ProviderCommand> {
-    crate::resume::all_command_status()
+pub async fn resume_command_statuses() -> Vec<crate::resume::ProviderCommand> {
+    tauri::async_runtime::spawn_blocking(crate::resume::all_command_status)
+        .await
+        .unwrap_or_default()
+}
+
+/// Every terminal the launcher can open, and which are installed here.
+#[tauri::command]
+pub async fn resume_terminals() -> Vec<crate::resume::TerminalStatus> {
+    tauri::async_runtime::spawn_blocking(crate::resume::all_terminals)
+        .await
+        .unwrap_or_default()
 }
 
 /// Current resume launcher preferences.

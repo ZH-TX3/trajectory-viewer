@@ -382,6 +382,17 @@ export interface SearchIndexProgress {
 export interface ResumeSettings {
   /** Provider id → program to start. Missing entries use the provider default. */
   commands: Record<string, string>;
+  /** Terminal id to open; `auto` (or unset) picks the best one installed. */
+  terminal?: string | null;
+}
+
+/** One terminal the launcher can open, and whether it is usable here. */
+export interface TerminalStatus {
+  id: string;
+  label: string;
+  available: boolean;
+  /** True for the `auto` entry, which follows whatever is installed. */
+  isDefault: boolean;
 }
 
 /** One provider's effective launcher command and how it resolves. */

@@ -10,7 +10,7 @@ import { TrajectoryView } from './TrajectoryView';
 import { TrajectoryErrorBoundary } from './TrajectoryErrorBoundary';
 import { SidebarSearch } from './SidebarSearch';
 import { SubagentCard } from './SubagentCard';
-import type { SessionMeta, SessionMessage, TrajectoryData } from '../types';
+import type { ProviderCommand, SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import { cn } from '../lib/utils';
 import { isTaskNotification, parseTaskNotification, resumeCommandText } from '../utils/format';
 import {
@@ -317,6 +317,11 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   // Probe the selected provider's launcher so the Resume button can disable
   // itself (with a reason) rather than opening a tab that immediately errors.
   // Each provider has its own CLI, so this re-checks when the session changes.
+  //
+  // The probe resolves every provider at once and shells out for an alias, so
+  // it is memoised across session switches — switching between sessions of the
+  // same provider used to re-run it every time.
+  const resumeProbeRef = useRef<Promise<ProviderCommand[]> | null>(null);
   useEffect(() => {
     const providerId = selectedSession?.providerId;
     if (providerId === undefined) {
@@ -326,14 +331,16 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     let cancelled = false;
     void (async () => {
       try {
-        const statuses = await api.resumeCommandStatuses();
+        resumeProbeRef.current ??= api.resumeCommandStatuses();
+        const statuses = await resumeProbeRef.current;
         if (cancelled) return;
         const mine = statuses.find((s) => s.providerId === providerId);
         setResumeCommand(mine?.command ?? null);
         setResumeAvailable(mine === undefined ? null : mine.kind !== 'missing');
       } catch {
         // Older backend without the command — leave the button enabled and
-        // let the launch report the real error.
+        // let the launch report the real error. A failed probe is not cached.
+        resumeProbeRef.current = null;
       }
     })();
     return () => {

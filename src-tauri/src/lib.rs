@@ -38,6 +38,7 @@ pub fn run() {
             commands::resume_session_in_terminal,
             commands::resume_command_available,
             commands::resume_command_statuses,
+            commands::resume_terminals,
             commands::get_resume_settings,
             commands::set_resume_settings,
             commands::list_trash,

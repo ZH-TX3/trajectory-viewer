@@ -554,6 +554,11 @@ pub fn launch(
 ) -> Result<ResumeOutcome, String> {
     validate_session_id(session_id)?;
 
+    // Checked before the command below: an unknown provider has no continuation
+    // flag at all, so reporting "claude was not found" for provider "nope" sends
+    // the user to install a CLI that was never the problem.
+    let resume_args = resume_args(provider_id, session_id)?;
+
     // Each provider has its own CLI and its own continuation flag, so the
     // command is looked up per provider rather than shared.
     let settings = get_settings();
@@ -572,8 +577,6 @@ pub fn launch(
     let cwd_missing = cwd.is_some() && recorded.is_none();
     let working_dir = recorded.clone().or_else(home_dir);
     let working_dir = working_dir.filter(|p| p.is_dir());
-
-    let resume_args = resume_args(provider_id, session_id)?;
 
     let command_line = format!("{} {}", command, resume_args.join(" "));
     spawn_terminal(

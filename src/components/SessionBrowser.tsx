@@ -423,11 +423,29 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   }, [activeTab, loadTrajectory]);
 
   // Refresh the session list periodically so new / updated sessions surface.
+  //
+  // A scan costs seconds on a large corpus, so the next poll is scheduled only
+  // after the previous one settles: a fixed 30s interval would otherwise start
+  // a second scan while the first is still running.
   useEffect(() => {
-    const timer = setInterval(() => {
-      api.listSessions().then(setSessions).catch(console.error);
-    }, 30000);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      if (cancelled) return;
+      timer = setTimeout(async () => {
+        try {
+          setSessions(await api.listSessions());
+        } catch (err) {
+          console.error(err);
+        }
+        schedule();
+      }, 30000);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer !== null) clearTimeout(timer);
+    };
   }, []);
 
   // Watch the selected session file: when its mtime changes, reload the tab.
@@ -454,11 +472,20 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   }, [selectedSession?.sourcePath, activeTab, loadMessages, loadTrajectory]);
 
   // Manual refresh: session list + current tab.
+  //
+  // A scan takes seconds on a large corpus, so a second click while one is in
+  // flight is ignored rather than queued — otherwise repeated clicks pile up
+  // scans that all land out of order.
+  const refreshingRef = useRef(false);
   const refreshAll = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
     try {
       setSessions(await api.listSessions());
     } catch (err) {
       console.error('refresh list failed', err);
+    } finally {
+      refreshingRef.current = false;
     }
     if (selectedSession?.sourcePath) {
       if (activeTab === 'trajectory') await loadTrajectory();

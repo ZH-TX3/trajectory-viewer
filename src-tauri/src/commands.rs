@@ -43,9 +43,16 @@ pub fn get_subagent_messages(
     session_manager::load_claude_messages_with_runs(&transcript, session)
 }
 
+/// Every session across the enabled providers.
+///
+/// Offloaded rather than run on the main thread: a scan walks every provider's
+/// session tree and measured ~4.5s over 755 sessions here. As a synchronous
+/// command that froze the UI, and the frontend polls it every 30s.
 #[tauri::command]
-pub fn list_sessions() -> Result<Vec<session_manager::SessionMeta>, String> {
-    Ok(session_manager::scan_sessions())
+pub async fn list_sessions() -> Result<Vec<session_manager::SessionMeta>, String> {
+    tauri::async_runtime::spawn_blocking(session_manager::scan_sessions)
+        .await
+        .map_err(|e| format!("Scanning sessions failed: {e}"))
 }
 
 #[tauri::command]

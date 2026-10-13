@@ -260,16 +260,32 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     };
   }, []);
 
+  // Which filter the first group was auto-expanded for (and the first session
+  // auto-selected). Keyed on the filter so a 30s refresh or a click cannot
+  // re-expand a group the user has since collapsed.
+  const autoExpandedFor = useRef<string | null>(null);
+
   // Load sessions on mount
   useEffect(() => {
     api.listSessions()
       .then((list) => {
         setSessions(list);
-        // Auto-expand + select within the initially active provider (not 'all',
-        // so we don't hop across tools before the real filter/group runs).
-        const groups = groupByProject(list, providerFilter, providerOrder);
+        // Select the first session within the initially active provider, but
+        // only once: a later refresh must not steal back a session the user has
+        // since clicked. Shares the guard with the auto-expand effect so the
+        // two stay in step.
+        if (autoExpandedFor.current !== null) return;
+        const filterKey = `${providerFilter}|${[...enabledProviders].sort().join(',')}`;
+        autoExpandedFor.current = filterKey;
+        // Group the way the list will actually be rendered — filtering first —
+        // so the group expanded here and the one the effect expands agree.
+        const visible = list.filter(
+          (s) => enabledProviders.has(s.providerId)
+            && (providerFilter === 'all' || s.providerId === providerFilter),
+        );
+        const groups = groupByProject(visible, providerFilter, providerOrder);
         if (groups.length > 0) {
-          setExpandedGroups(new Set([groups[0].groupName]));
+          setExpandedGroups((prev) => new Set(prev).add(groups[0].groupName));
           setSelectedKey(`${groups[0].sessions[0].providerId}::${groups[0].sessions[0].sessionId}`);
         }
       })
@@ -289,24 +305,39 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     return groupByProject(filteredSessions, providerFilter, providerOrder);
   }, [filteredSessions, providerFilter, providerOrder]);
 
-  // Auto-select when filter changes
+  // Auto-expand the first group when the filter changes (a different provider
+  // shows a different project list), and on first load.
+  //
+  // Keyed on the filter rather than on `groupedSessions`, because the list is
+  // refreshed every 30s and a new array would re-expand a group the user has
+  // since collapsed. It also must not depend on `selectedKey`: it used to live
+  // in the auto-select effect, where every click re-added group #1.
+  useEffect(() => {
+    if (groupedSessions.length === 0) return;
+    const filterKey = `${providerFilter}|${[...enabledProviders].sort().join(',')}`;
+    if (autoExpandedFor.current === filterKey) return;
+    autoExpandedFor.current = filterKey;
+    const first = groupedSessions[0].groupName;
+    setExpandedGroups((prev) => (prev.has(first) ? prev : new Set(prev).add(first)));
+  }, [groupedSessions, providerFilter, enabledProviders]);
+
+  // Drop the selection when it falls outside the current filter, rather than
+  // silently jumping to the first session — clicking a session and landing on a
+  // different one is more confusing than an empty pane.
   useEffect(() => {
     if (groupedSessions.length === 0) {
       setSelectedKey(null);
       return;
     }
-    // Ensure first group is expanded
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (groupedSessions.length > 0) {
-        next.add(groupedSessions[0].groupName);
-      }
-      return next;
-    });
-    // Check if selected still exists
+    // A cross-session jump sets the filter and the key together; skip the
+    // in-between render, where the new key is not yet in the filtered list.
+    if (pendingSelectKey.current !== null) {
+      if (pendingSelectKey.current === selectedKey) pendingSelectKey.current = null;
+      return;
+    }
     const exists = filteredSessions.some((s) => `${s.providerId}::${s.sessionId}` === selectedKey);
     if (!exists) {
-      setSelectedKey(`${groupedSessions[0].sessions[0].providerId}::${groupedSessions[0].sessions[0].sessionId}`);
+      setSelectedKey(null);
     }
   }, [groupedSessions, filteredSessions, selectedKey]);
 
@@ -445,12 +476,15 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   /**
    * Jump to a cross-session search result.
    *
-   * Order matters: the auto-select effect below resets `selectedKey` when the
-   * target isn't in the currently filtered list, so the provider filter and
-   * group expansion must be updated in the same batch as the selection.
+   * `providerFilter` and the selection must land together. They do, but the
+   * filter only takes effect on the next render, and the auto-clear effect
+   * below runs against the OLD filtered list in between — so the pending key is
+   * recorded and the clear effect skips it for one pass.
    */
+  const pendingSelectKey = useRef<string | null>(null);
   const handleOpenSearchResult = useCallback(
     (group: { provider: string; sessionId: string; sessionKey: string }, focusTs: number | null) => {
+      pendingSelectKey.current = group.sessionKey;
       setProviderFilter(group.provider as ProviderFilter);
       setExpandedGroups((prev) => {
         const next = new Set(prev);

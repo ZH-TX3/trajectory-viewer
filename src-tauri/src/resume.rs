@@ -364,11 +364,65 @@ fn resolves_in_shell(command: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The user's login shell, used for probing and for running an alias.
+///
+/// A GUI app is not launched from a shell, so `SHELL` is usually unset here;
+/// falling back to `/bin/sh` reads `.profile` rather than `.zshrc`, so an alias
+/// defined in the zsh startup file is wrongly reported as missing. macOS has
+/// shipped zsh as the default login shell since 10.15, so that is the fallback
+/// there.
+#[cfg(not(windows))]
+fn login_shell() -> String {
+    match std::env::var("SHELL") {
+        Ok(shell) if !shell.trim().is_empty() => shell,
+        _ => (if cfg!(target_os = "macos") {
+            "/bin/zsh"
+        } else {
+            "/bin/sh"
+        })
+        .to_string(),
+    }
+}
+
+/// Assemble the shell line a POSIX terminal will run.
+///
+/// An alias has to stay UNQUOTED: `'cc'` suppresses alias expansion, so the
+/// shell answers `cc: command not found` for a name it could otherwise resolve.
+/// Only the first word undergoes expansion, so the arguments stay quoted. The
+/// command is validated to a charset without shell metacharacters, so leaving
+/// it bare cannot turn into a second command.
+#[cfg(not(windows))]
+fn posix_command_line(
+    launcher: Launcher,
+    command: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    shell: &str,
+) -> String {
+    let mut line = String::new();
+    if let Some(dir) = cwd {
+        line.push_str(&format!("cd {} && ", shell_quote(&dir.to_string_lossy())));
+    }
+    if launcher == Launcher::ShellAlias {
+        line.push_str(command);
+    } else {
+        line.push_str(&shell_quote(command));
+    }
+    for arg in args {
+        line.push(' ');
+        line.push_str(&shell_quote(arg));
+    }
+    // Leave a usable shell behind: without this the tab closes the instant the
+    // CLI exits, taking the conversation's output with it.
+    line.push_str(&format!("; exec {}", shell_quote(shell)));
+    line
+}
+
 /// POSIX shells load aliases only in interactive mode, so probe through a
 /// login interactive shell.
 #[cfg(not(windows))]
 fn resolves_in_shell(command: &str) -> bool {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let shell = login_shell();
     std::process::Command::new(shell)
         .args(["-lic", &format!("command -v {command}")])
         .stdout(std::process::Stdio::null())
@@ -769,8 +823,8 @@ fn quote_windows_arg(value: &str) -> String {
     format!("\"{}\"", value.replace('"', ""))
 }
 
-/// macOS: run the command in the frontmost Terminal window, which is what
-/// "resume here" means on a platform that allows it.
+/// macOS: run the command in the user's terminal — a new TAB of the window
+/// they already have open, which is what "resume here" means.
 ///
 /// The shell is started as a LOGIN, INTERACTIVE shell so aliases defined in
 /// `~/.zshrc` resolve — an alias is not a program and cannot be exec'd.
@@ -782,39 +836,32 @@ fn spawn_terminal(
     args: &[String],
     cwd: Option<&Path>,
 ) -> Result<(), String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let shell = login_shell();
+    let line = posix_command_line(launcher, command, args, cwd, &shell);
 
-    let mut line = String::new();
-    if let Some(dir) = cwd {
-        line.push_str(&format!("cd {} && ", shell_quote(&dir.to_string_lossy())));
-    }
-    line.push_str(&shell_quote(command));
-    for arg in args {
-        line.push(' ');
-        line.push_str(&shell_quote(arg));
-    }
-    // Keep the window usable if the CLI exits immediately.
-    if launcher == Launcher::Direct {
-        line.push_str(&format!("; exec {}", shell_quote(&shell)));
-    }
-
-    // Terminal.app ships with macOS and is scripted with `do script`; iTerm2
-    // opens the same command in a new window of its default profile.
-    let script_body = if terminal == "iterm" && terminal_available("iterm") {
-        "create window with default profile command".to_string()
+    // iTerm2 and Terminal.app speak different verbs for the same thing, so the
+    // script is chosen per app rather than shared.
+    let (app, verb, target) = if terminal == "iterm" && terminal_available("iterm") {
+        (
+            "iTerm",
+            "create tab with default profile",
+            "current session of current tab of current window",
+        )
     } else {
-        "do script".to_string()
-    };
-    let app = if script_body.starts_with("create") {
-        "iTerm"
-    } else {
-        "Terminal"
+        ("Terminal", "do script", "")
     };
 
-    let script = format!(
-        "tell application \"{app}\"\n  activate\n  {script_body} \"{}\"\nend tell",
-        line.replace('\\', "\\\\").replace('"', "\\\"")
-    );
+    let script = if target.is_empty() {
+        format!(
+            "tell application \"{app}\"\n  activate\n  {verb} \"{}\"\nend tell",
+            line.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    } else {
+        format!(
+            "tell application \"{app}\"\n  activate\n  {verb}\n  tell {target}\n    write text \"{}\"\n  end tell\nend tell",
+            line.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    };
     std::process::Command::new("osascript")
         .args(["-e", &script])
         .spawn()
@@ -825,7 +872,7 @@ fn spawn_terminal(
 #[cfg(not(any(windows, target_os = "macos")))]
 fn spawn_terminal(
     terminal: &str,
-    _launcher: Launcher,
+    launcher: Launcher,
     command: &str,
     args: &[String],
     cwd: Option<&Path>,
@@ -833,18 +880,14 @@ fn spawn_terminal(
     // Linux terminals differ too much to guess; try the common ones in order.
     const DEFAULT_TERMINALS: [&str; 4] =
         ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"];
-    let mut shell_command = String::new();
-    if let Some(dir) = cwd {
-        shell_command.push_str(&format!("cd {} && ", shell_quote(&dir.to_string_lossy())));
-    }
-    shell_command.push_str(&shell_quote(command));
-    for arg in args {
-        shell_command.push(' ');
-        shell_command.push_str(&shell_quote(arg));
-    }
-    // An interactive shell so aliases resolve, kept open afterwards.
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let script = format!("{shell_command}; exec {}", shell_quote(&shell));
+    let shell = login_shell();
+    // An interactive, login shell runs the line, so an alias defined in the
+    // user's profile resolves.
+    let script = format!(
+        "{} -lic {}",
+        shell_quote(&shell),
+        shell_quote(&posix_command_line(launcher, command, args, cwd, &shell))
+    );
 
     // A pinned terminal is tried on its own; `auto` walks the fallback chain.
     let candidates: Vec<&str> = if terminal == "auto" {
@@ -857,8 +900,10 @@ fn spawn_terminal(
             continue;
         }
         let mut cmd = std::process::Command::new(terminal);
-        // gnome-terminal and konsole take `-e`; xterm too.
-        cmd.arg("-e").arg("sh").arg("-c").arg(&script);
+        // The script starts its own login shell, so `-e` hands it straight to
+        // the terminal — going through `sh -c` here would add a shell layer
+        // that does not load the profile.
+        cmd.arg("-e").arg(&script);
         if cmd.spawn().is_ok() {
             return Ok(());
         }
@@ -1079,6 +1124,83 @@ mod tests {
             started.elapsed()
         );
         assert!(!which("definitely-not-a-real-command-xyz"));
+    }
+
+    // A GUI app has no SHELL set, so the probe must still pick a shell that
+    // reads the user's real startup file. Falling back to /bin/sh on macOS
+    // reads .profile instead of .zshrc, where `cc` is actually defined.
+    #[test]
+    #[cfg(not(windows))]
+    fn login_shell_defaults_to_zsh_on_macos() {
+        let expected = if cfg!(target_os = "macos") {
+            "/bin/zsh"
+        } else {
+            "/bin/sh"
+        };
+        // Only assert the fallback: a real SHELL must be honoured as-is.
+        let probe_without_shell = || {
+            let saved = std::env::var("SHELL").ok();
+            std::env::remove_var("SHELL");
+            let shell = login_shell();
+            if let Some(v) = saved {
+                std::env::set_var("SHELL", v);
+            }
+            shell
+        };
+        let _guard = crate::trajectory::parser::opencode::opencode_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(probe_without_shell(), expected);
+    }
+
+    // Regression: the POSIX launcher quoted the command unconditionally, but
+    // `'cc'` suppresses alias expansion — so a shell alias reported as
+    // available then failed with `cc: command not found` when launched.
+    #[test]
+    #[cfg(not(windows))]
+    fn an_alias_is_left_unquoted_so_the_shell_expands_it() {
+        let args = vec!["--resume".to_string(), "abc".to_string()];
+
+        let alias_line = posix_command_line(
+            Launcher::ShellAlias,
+            "cc",
+            &args,
+            Some(Path::new("/tmp/proj")),
+            "/bin/zsh",
+        );
+        // The command word must appear bare, not wrapped in quotes.
+        assert!(
+            alias_line.starts_with("cd '/tmp/proj' && cc "),
+            "{alias_line}"
+        );
+        assert!(
+            !alias_line.contains("'cc'"),
+            "must not quote the alias: {alias_line}"
+        );
+        assert!(
+            !alias_line.contains("\"cc\""),
+            "must not quote the alias: {alias_line}"
+        );
+
+        // A real program is still quoted: nothing but the first word needs
+        // expansion, and quoting protects against a path with spaces.
+        let direct_line = posix_command_line(
+            Launcher::Direct,
+            "claude",
+            &args,
+            Some(Path::new("/tmp/proj")),
+            "/bin/zsh",
+        );
+        assert!(
+            direct_line.starts_with("cd '/tmp/proj' && 'claude' "),
+            "{direct_line}"
+        );
+
+        // Arguments are always quoted, including for an alias.
+        assert!(alias_line.contains(" '--resume' 'abc'"), "{alias_line}");
+
+        // The window stays usable after the CLI exits.
+        assert!(alias_line.ends_with("; exec '/bin/zsh'"), "{alias_line}");
     }
 
     // A PATH entry that exists but is not executable must not count on POSIX.

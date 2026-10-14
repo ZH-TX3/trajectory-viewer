@@ -8,9 +8,13 @@
 //     you explore a long ledger without losing the full-timeline context
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { TrajectoryTurnModel, TrajectoryTimelineMode } from '../utils/layout';
+import type {
+  TrajectoryTurnModel,
+  TrajectoryTimelineMode,
+  TrajectoryTurnUsage,
+} from '../utils/layout';
 import { deriveTrajectoryTimeline, timelineRecordDetail } from '../utils/layout';
-import { formatDurationMs, formatDurationSeconds, formatRecordedTime } from '../utils/format';
+import { formatDurationMs, formatDurationSeconds, formatRecordedTime, formatTokenCount } from '../utils/format';
 import { cn } from '../lib/utils';
 
 interface TrajectoryTimelineProps {
@@ -31,6 +35,38 @@ const MINIMUM_ZOOM_OPERATIONS = 4;
 const EDGE_PAN_ZONE_FRACTION = 0.08;
 const EDGE_PAN_STEP_FRACTION = 0.025;
 const MAXIMUM_EDGE_PAN_PX = 32;
+
+// Three lane rows end at 3 * 17 = 51px. The usage band sits below them, inside
+// the same projected wrapper as the spans, so it zooms and pans with the lanes
+// instead of needing a second scale. Keep TIMELINE_HEIGHT in sync with the
+// section's `h-[72px]` class.
+const USAGE_BAND_TOP = 53;
+const USAGE_BAND_HEIGHT = 16;
+
+/** A turn's tokens, in stacking order from the bottom of the bar. */
+const USAGE_SEGMENTS = [
+  { key: 'cacheRead', className: 'bg-teal-400 dark:bg-teal-500' },
+  { key: 'cacheWrite', className: 'bg-orange-400 dark:bg-orange-500' },
+  { key: 'input', className: 'bg-sky-400 dark:bg-sky-500' },
+  { key: 'output', className: 'bg-emerald-400 dark:bg-emerald-500' },
+] as const;
+
+/**
+ * What one usage bar means: the bucket sizes, and the share of the prompt that
+ * came out of the cache — the number the band exists to make visible.
+ */
+function usageTooltip(usage: TrajectoryTurnUsage): string {
+  const lines = [`Turn ${usage.turn ?? 'prologue'} · ${formatTokenCount(usage.total)} tokens`];
+  const promptTokens = usage.cacheRead + usage.cacheWrite + usage.input;
+  if (promptTokens > 0) {
+    lines.push(`cache hit ${Math.round((usage.cacheRead / promptTokens) * 100)}%`);
+  }
+  if (usage.cacheRead > 0) lines.push(`cache read ${formatTokenCount(usage.cacheRead)}`);
+  if (usage.cacheWrite > 0) lines.push(`cache written ${formatTokenCount(usage.cacheWrite)}`);
+  if (usage.input > 0) lines.push(`fresh input ${formatTokenCount(usage.input)}`);
+  if (usage.output > 0) lines.push(`output ${formatTokenCount(usage.output)}`);
+  return lines.join('\n');
+}
 
 function clampFraction(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -79,6 +115,12 @@ function LaneLabels() {
           {label}
         </span>
       ))}
+      <span
+        className="absolute right-1 -translate-y-1/2"
+        style={{ top: USAGE_BAND_TOP + USAGE_BAND_HEIGHT / 2 }}
+      >
+        Tokens
+      </span>
     </div>
   );
 }
@@ -93,6 +135,11 @@ export function TrajectoryTimeline({
   onRecordSelect,
 }: TrajectoryTimelineProps) {
   const model = useMemo(() => deriveTrajectoryTimeline(turns, mode), [turns, mode]);
+  // Bars share one scale: the busiest turn fills the band, the rest scale to it.
+  const usageMax = useMemo(
+    () => (model === null ? 0 : Math.max(0, ...model.usage.map((usage) => usage.total))),
+    [model],
+  );
   const detailByIndex = useMemo(
     () =>
       new Map(
@@ -414,7 +461,7 @@ export function TrajectoryTimeline({
       <section
         ref={rootRef}
         aria-label="Trajectory timeline"
-        className="h-[50px] border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
+        className="h-[72px] border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
       >
         <LaneLabels />
         <div className="flex-1 flex items-center justify-center text-[11px] text-muted-foreground">
@@ -444,7 +491,7 @@ export function TrajectoryTimeline({
     <section
       ref={rootRef}
       aria-label="Trajectory timeline"
-      className="relative h-[50px] border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
+      className="relative h-[72px] border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
     >
       <LaneLabels />
 
@@ -558,6 +605,35 @@ export function TrajectoryTimeline({
               />
             );
           })}
+
+          {/* Usage band — one stacked bar per turn, positioned in the same
+              coordinate space as the spans so it tracks zoom and pan. */}
+          {usageMax > 0 &&
+            model.usage.map((usage) => (
+              <div
+                key={`usage-${usage.turn ?? 'prologue'}`}
+                data-usage-turn={usage.turn ?? 0}
+                title={usageTooltip(usage)}
+                className="absolute flex flex-col-reverse rounded-[1px] overflow-hidden pointer-events-auto"
+                style={{
+                  left: `${((usage.start - model.start) / fullDuration) * 100}%`,
+                  width: `${Math.max(((usage.end - usage.start) / fullDuration) * 100, 0.12)}%`,
+                  height: Math.max(2, (usage.total / usageMax) * USAGE_BAND_HEIGHT),
+                  top: USAGE_BAND_TOP,
+                }}
+              >
+                {USAGE_SEGMENTS.map((segment) =>
+                  usage[segment.key] > 0 ? (
+                    <div
+                      key={segment.key}
+                      data-usage-segment={segment.key}
+                      className={segment.className}
+                      style={{ flexGrow: usage[segment.key] }}
+                    />
+                  ) : null,
+                )}
+              </div>
+            ))}
         </div>
 
         {/* Zoom-window thumb — where the current viewport sits in the whole

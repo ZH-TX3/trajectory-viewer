@@ -186,6 +186,74 @@ describe('deriveTrajectoryTimeline', () => {
   it('returns null when there is nothing to lay out', () => {
     expect(deriveTrajectoryTimeline([], 'sequence')).toBeNull();
   });
+
+  it('sums a turn token buckets into one usage bar', () => {
+    const withUsage = [
+      event({ seq: 1, eventType: 'user-message', turn: 1, step: 0, ts: 1000 }),
+      event({
+        seq: 2,
+        eventType: 'assistant-message',
+        turn: 1,
+        step: 1,
+        ts: 1100,
+        inputTokens: 4,
+        outputTokens: 210,
+        cacheReadTokens: 20000,
+        cacheWriteTokens: 12345,
+      }),
+      event({ seq: 3, eventType: 'user-message', turn: 2, step: 0, ts: 2000 }),
+      event({
+        seq: 4,
+        eventType: 'assistant-message',
+        turn: 2,
+        step: 1,
+        ts: 2100,
+        inputTokens: 2,
+        outputTokens: 10,
+        cacheReadTokens: 30000,
+      }),
+    ];
+
+    const model = deriveTrajectoryTimeline(deriveTrajectoryLayout(withUsage), 'sequence')!;
+    expect(model.usage).toHaveLength(2);
+    expect(model.usage[0]).toMatchObject({
+      turn: 1,
+      input: 4,
+      output: 210,
+      cacheRead: 20000,
+      cacheWrite: 12345,
+      total: 32559,
+    });
+    // A bar spans its whole turn, including the one-unit gap that follows it.
+    expect(model.usage[0].start).toBe(0);
+    expect(model.usage[0].end).toBe(2);
+    expect(model.usage[1].start).toBe(3);
+  });
+
+  it('omits turns that reported no tokens', () => {
+    const model = deriveTrajectoryTimeline(deriveTrajectoryLayout(events), 'sequence')!;
+    expect(model.usage).toEqual([]);
+  });
+
+  it('positions a usage bar by recorded time in actual mode', () => {
+    const withUsage = [
+      event({ seq: 1, eventType: 'user-message', turn: 1, step: 0, ts: 1000 }),
+      event({
+        seq: 2,
+        eventType: 'assistant-message',
+        turn: 1,
+        step: 1,
+        ts: 1100,
+        durationMs: 250,
+        outputTokens: 50,
+      }),
+    ];
+
+    const model = deriveTrajectoryTimeline(deriveTrajectoryLayout(withUsage), 'actual')!;
+    expect(model.usage).toHaveLength(1);
+    expect(model.usage[0].start).toBe(1000);
+    expect(model.usage[0].end).toBe(1350);
+  });
 });
 
 describe('trajectoryTimelineFocusIndexes', () => {

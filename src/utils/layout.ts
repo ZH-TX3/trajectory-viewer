@@ -642,11 +642,50 @@ export interface TrajectorySpanModel {
   label: string;
 }
 
+/**
+ * One turn's token accounting, positioned in the timeline's own coordinate
+ * space so a usage band can sit under the lanes without a second scale.
+ */
+export interface TrajectoryTurnUsage {
+  turn: number | null;
+  start: number;
+  end: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+}
+
 export interface TrajectoryTimelineModel {
   start: number;
   end: number;
   spans: TrajectorySpanModel[];
   turnBoundaries: { turn: number; time: number }[];
+  /** Turns that reported token usage; empty when nothing did. */
+  usage: TrajectoryTurnUsage[];
+}
+
+/**
+ * Sum a turn's four token buckets. An assistant record carries the usage for
+ * one request, and a turn can hold several, so they add up.
+ */
+function turnUsageTotals(
+  turn: TrajectoryTurnModel,
+): Omit<TrajectoryTurnUsage, 'turn' | 'start' | 'end'> {
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  for (const group of turn.groups) {
+    for (const cell of group.cells) {
+      input += cell.input ?? 0;
+      output += cell.output ?? 0;
+      cacheRead += cell.cacheRead ?? 0;
+      cacheWrite += cell.cacheWrite ?? 0;
+    }
+  }
+  return { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite };
 }
 
 function laneFor(kind: TrajectoryCellKind): number {
@@ -674,6 +713,7 @@ export function deriveTrajectoryTimeline(
   if (mode === 'actual') {
     const spans: TrajectorySpanModel[] = [];
     const turnBoundaries: { turn: number; time: number }[] = [];
+    const usage: TrajectoryTurnUsage[] = [];
     let hasSpans = false;
 
     for (const turn of turns) {
@@ -696,8 +736,18 @@ export function deriveTrajectoryTimeline(
       );
       if (turnSpans.length === 0) continue;
       hasSpans = true;
+      const turnStart = Math.min(...turnSpans.map((s) => s.start));
       if (turn.turn !== null) {
-        turnBoundaries.push({ turn: turn.turn, time: Math.min(...turnSpans.map((s) => s.start)) });
+        turnBoundaries.push({ turn: turn.turn, time: turnStart });
+      }
+      const totals = turnUsageTotals(turn);
+      if (totals.total > 0) {
+        usage.push({
+          turn: turn.turn,
+          start: turnStart,
+          end: Math.max(...turnSpans.map((s) => s.end)),
+          ...totals,
+        });
       }
       spans.push(...turnSpans);
     }
@@ -708,6 +758,7 @@ export function deriveTrajectoryTimeline(
       end: Math.max(...spans.map((s) => s.end)),
       spans,
       turnBoundaries,
+      usage,
     };
   }
 
@@ -716,11 +767,13 @@ export function deriveTrajectoryTimeline(
   // show clear separations between turns instead of a single compressed band.
   const spans: TrajectorySpanModel[] = [];
   const turnBoundaries: { turn: number; time: number }[] = [];
+  const usage: TrajectoryTurnUsage[] = [];
   let cursor = 0;
 
   for (const turn of turns) {
     const cells = turn.groups.flatMap((group) => group.cells.filter((cell) => cell.requestOnly !== true));
     if (cells.length === 0) continue;
+    const turnStart = cursor;
     if (turn.turn !== null) turnBoundaries.push({ turn: turn.turn, time: cursor });
     spans.push(
       ...cells.map((cell, offset) => ({
@@ -733,11 +786,15 @@ export function deriveTrajectoryTimeline(
         label: cell.text,
       })),
     );
+    const totals = turnUsageTotals(turn);
+    if (totals.total > 0) {
+      usage.push({ turn: turn.turn, start: turnStart, end: turnStart + cells.length, ...totals });
+    }
     cursor += cells.length + SEQUENCE_TURN_GAP;
   }
 
   if (spans.length === 0) return null;
-  return { start: 0, end: cursor, spans, turnBoundaries };
+  return { start: 0, end: cursor, spans, turnBoundaries, usage };
 }
 
 /**

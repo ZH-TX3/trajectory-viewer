@@ -148,15 +148,15 @@ pub fn decode_project_name(name: &str) -> String {
 /// `D:/DSH/trajectory-viewer-src-tauri` or `D:/DSH/trajectory-viewer/src-tauri`,
 /// and only the one on disk is returned.
 ///
+/// Both naming shapes are understood: Windows `D--DSH-proj`, where the drive is
+/// the leading letter, and POSIX `-Users-me-proj`, where the leading `-` is the
+/// root slash.
+///
 /// Returns `None` when nothing matches - the project may simply have been
 /// deleted, in which case the caller falls back to the decoded label.
 pub fn resolve_project_path(encoded: &str) -> Option<String> {
-    // Expect `<drive>--<rest>`; a leading ASCII letter is the drive.
-    if encoded.len() < 4 || !encoded.as_bytes()[0].is_ascii_alphabetic() || &encoded[1..3] != "--" {
-        return None;
-    }
-    let drive = encoded[..1].to_ascii_uppercase();
-    let segments: Vec<&str> = encoded[3..].split('-').collect();
+    let (root, rest) = split_encoded_name(encoded)?;
+    let segments: Vec<&str> = rest.split('-').collect();
 
     // Greedy walk: at each depth take the SHORTEST segment that exists on disk,
     // so the split points are decided by what is really there rather than by
@@ -180,7 +180,32 @@ pub fn resolve_project_path(encoded: &str) -> Option<String> {
         None
     }
 
-    walk(&segments, &format!("{drive}:/"), 0)
+    walk(&segments, &root, 0)
+}
+
+/// Split an encoded directory name into its filesystem root and the rest.
+///
+/// A Windows name reads `<drive>--<rest>`, where the drive is one ASCII letter
+/// and the two dashes stand in for `:\`. A POSIX path has no drive: its leading
+/// `/` became the first `-`, so the name starts with a single dash and the root
+/// is `/`. Anything else - a plain label, an empty string, two leading dashes -
+/// is not a path that can be rebuilt.
+///
+/// Byte comparisons rather than slicing: an encoded name may hold non-ASCII
+/// text, and `&encoded[1..3]` would panic when a multi-byte character straddles
+/// that boundary.
+fn split_encoded_name(encoded: &str) -> Option<(String, &str)> {
+    let bytes = encoded.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b'-' && bytes[2] == b'-' {
+        return Some((
+            format!("{}:/", encoded[..1].to_ascii_uppercase()),
+            &encoded[3..],
+        ));
+    }
+    if bytes.first() == Some(&b'-') && bytes.get(1) != Some(&b'-') {
+        return Some(("/".to_string(), &encoded[1..]));
+    }
+    None
 }
 
 /// The path to show for a session's project.
@@ -313,6 +338,38 @@ mod tests {
         // Not an encoded path at all.
         assert_eq!(resolve_project_path("plain"), None);
         assert_eq!(resolve_project_path(""), None);
+    }
+
+    // The two naming shapes differ only in how the root is spelled, and getting
+    // that wrong makes the whole lookup return `None` on one of the platforms.
+    #[test]
+    fn an_encoded_name_is_split_into_a_root_and_its_segments() {
+        assert_eq!(
+            split_encoded_name("D--DSH-proj"),
+            Some(("D:/".to_string(), "DSH-proj"))
+        );
+        assert_eq!(
+            split_encoded_name("-Users-me-proj"),
+            Some(("/".to_string(), "Users-me-proj"))
+        );
+
+        // A bare drive letter is lowercase in the encoding, uppercase after.
+        assert_eq!(
+            split_encoded_name("c--proj"),
+            Some(("C:/".to_string(), "proj"))
+        );
+
+        // `-` is the encoding of the root itself. It splits into a root with
+        // nothing under it, and the walk over that lone empty segment finds no
+        // directory - which is the right answer, since `/` names no project.
+        assert_eq!(split_encoded_name("-"), Some(("/".to_string(), "")));
+        assert_eq!(resolve_project_path("-"), None);
+
+        // Not a path at all: an empty or plain label. A POSIX name has exactly
+        // one leading dash, so `--x` is not a root plus a name.
+        assert_eq!(split_encoded_name(""), None);
+        assert_eq!(split_encoded_name("plain"), None);
+        assert_eq!(split_encoded_name("--x"), None);
     }
 
     // The recorded `cwd` is authoritative: it survives the lossy encoding,

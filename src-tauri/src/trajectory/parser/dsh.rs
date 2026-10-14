@@ -6,13 +6,18 @@
 // DSH format:
 // - Stored as ~/.dsh/sessions/{project}/{session-id}/session.jsonl.zstd
 // - zstd-compressed JSONL with event types:
-//   - session: metadata (id, createdAt, cwd)
+//   - session: metadata (id, createdAt, cwd, version)
 //   - user/message: user input
 //   - assistant/message: assistant response (content blocks may include tool-calls)
-//   - assistant/chunk: streaming chunks (block-start, text-delta, tool-call-delta, etc.)
+//   - assistant/chunk: streaming chunks (v0/v1 only; v2+ batch these into
+//     `assistant/attempt` — see `dsh_format::attempt_chunks`)
 //   - tool/call: tool invocation
 //   - tool/result: tool execution result
 //   - turn/start, turn/end, step/start, step/end: turn/step boundaries
+//
+// The session-log format is versioned (header `version`). Everything that
+// depends on a version lives in the `dsh_format` adapter; this normalizer is
+// written against the v0/v1 baseline shape and stays version-agnostic.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -21,6 +26,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::trajectory::parser::dsh_format::{self, VersionSupport};
 use crate::trajectory::utils::{finalize_trajectory_timings, parse_timestamp_to_ms, ParseWarnings};
 use crate::trajectory::{ContentBlock, TrajectoryEvent};
 
@@ -91,6 +97,7 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
     let mut current_turn = 0usize;
     let mut current_step = 0usize;
     let mut warnings = ParseWarnings::default();
+    let mut version_support: Option<VersionSupport> = None;
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -109,11 +116,16 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
         let line_type = json["type"].as_str().unwrap_or("").to_string();
         let ts = parse_dsh_timestamp(&json["time"]).unwrap_or(0);
 
-        // Extract session ID from the session metadata line
+        // Extract session ID from the session metadata line, and settle the
+        // format version before any event is interpreted.
         if session_id.is_empty() && line_type == "session" {
             if let Some(id) = json["id"].as_str() {
                 session_id = id.to_string();
             }
+        }
+        if version_support.is_none() && line_type == "session" {
+            let version = dsh_format::header_version(&json);
+            version_support = Some(dsh_format::classify(version));
         }
 
         match line_type.as_str() {
@@ -437,6 +449,7 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
 
             // Streaming chunks: accumulate first-token timing and usage so the
             // following assistant/message can be annotated precisely.
+            // (v0/v1 shape; v2+ arrives via `assistant/attempt` below.)
             "assistant/chunk" => {
                 let data = &json["data"];
                 let turn_key = data["turn"]
@@ -447,33 +460,21 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     .as_u64()
                     .map(|value| value as usize)
                     .unwrap_or(current_step);
-                let chunk = &data["chunk"];
-                let chunk_type = chunk["type"].as_str().unwrap_or("");
+                accumulate_chunk(&mut chunk_states, turn_key, step_key, ts, &data["chunk"]);
+            }
 
-                let state = chunk_states.entry((turn_key, step_key)).or_default();
-                if state.first_chunk_ms.is_none() {
-                    state.first_chunk_ms = Some(ts);
-                }
-                // First visible output marks the first token.
-                if state.first_token_ms.is_none() {
-                    let is_first_token = chunk_type == "text-delta"
-                        || (chunk_type == "block-end"
-                            && chunk["block"]["type"].as_str() == Some("text"))
-                        || (chunk_type == "block-end"
-                            && chunk["block"]["type"].as_str() == Some("tool-call"));
-                    if is_first_token {
-                        state.first_token_ms = Some(ts);
-                    }
-                }
-                if chunk_type == "usage" {
-                    if let Some(chunk_usage) = usage_from_value(&chunk["usage"]) {
-                        let usage = state.usage.get_or_insert(Usage::default());
-                        usage.input += chunk_usage.input;
-                        usage.output += chunk_usage.output;
-                        usage.reasoning += chunk_usage.reasoning;
-                        usage.cache_read += chunk_usage.cache_read;
-                        usage.cache_write += chunk_usage.cache_write;
-                    }
+            // v2+ batches the streaming chunks into `assistant/attempt`. Recover
+            // them so timing and streamed usage stay exact instead of degrading
+            // to the estimates in `finalize_trajectory_timings`.
+            "assistant/attempt" => {
+                for recovered in dsh_format::attempt_chunks(&json) {
+                    accumulate_chunk(
+                        &mut chunk_states,
+                        recovered.turn.unwrap_or(current_turn),
+                        recovered.step.unwrap_or(current_step),
+                        recovered.time,
+                        recovered.chunk,
+                    );
                 }
             }
 
@@ -510,7 +511,61 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
     // Fill in duration / TTFT estimates
     finalize_trajectory_timings(&mut events);
 
+    if let Some(summary) = warnings.summary() {
+        eprintln!("[trajectory] {}: {}", path.display(), summary);
+    }
+
+    // A log from a newer harness than this adapter knows is parsed best-effort:
+    // the event vocabulary may have moved on, so the numbers can be incomplete
+    // rather than wrong. Say so instead of passing them off as exact.
+    if let Some(VersionSupport::Unknown(version)) = version_support {
+        eprintln!(
+            "[trajectory] {}: session log format v{version} is newer than this build \
+             understands (max v{}); timeline may be incomplete",
+            path.display(),
+            dsh_format::MAX_KNOWN_VERSION
+        );
+    }
+
     Ok((session_id, events))
+}
+
+/// Fold one streaming chunk into the per-step state.
+///
+/// Shared by the v0/v1 `assistant/chunk` event and the chunks recovered from a
+/// v2+ `assistant/attempt`, so both generations annotate timing identically.
+fn accumulate_chunk(
+    states: &mut HashMap<(usize, usize), StepChunkState>,
+    turn_key: usize,
+    step_key: usize,
+    ts: i64,
+    chunk: &Value,
+) {
+    let chunk_type = chunk["type"].as_str().unwrap_or("");
+
+    let state = states.entry((turn_key, step_key)).or_default();
+    if state.first_chunk_ms.is_none() {
+        state.first_chunk_ms = Some(ts);
+    }
+    // First visible output marks the first token.
+    if state.first_token_ms.is_none() {
+        let is_first_token = chunk_type == "text-delta"
+            || (chunk_type == "block-end" && chunk["block"]["type"].as_str() == Some("text"))
+            || (chunk_type == "block-end" && chunk["block"]["type"].as_str() == Some("tool-call"));
+        if is_first_token {
+            state.first_token_ms = Some(ts);
+        }
+    }
+    if chunk_type == "usage" {
+        if let Some(chunk_usage) = usage_from_value(&chunk["usage"]) {
+            let usage = state.usage.get_or_insert(Usage::default());
+            usage.input += chunk_usage.input;
+            usage.output += chunk_usage.output;
+            usage.reasoning += chunk_usage.reasoning;
+            usage.cache_read += chunk_usage.cache_read;
+            usage.cache_write += chunk_usage.cache_write;
+        }
+    }
 }
 
 /// Parse a DSH timestamp value (milliseconds epoch).
@@ -804,5 +859,108 @@ mod tests {
         assert_eq!(events[0].event_type, "user-message");
         assert_eq!(events[1].event_type, "assistant-message");
         assert_eq!(events[1].content.as_deref(), Some("Hi!"));
+    }
+
+    /// The same session written in the v0/v1 shape (top-level
+    /// `assistant/chunk`) and in the v2+ shape (chunks batched into
+    /// `assistant/attempt`) must parse to identical timeline data.
+    ///
+    /// This is the regression guard for the format adapter: without it a v2+
+    /// log still parses "successfully" but loses precise TTFT and durations,
+    /// degrading them to the estimates in `finalize_trajectory_timings`.
+    #[test]
+    fn v0_and_v2_shapes_parse_identically() {
+        let dir = tempdir().unwrap();
+        let header = r#"{"type":"session","id":"sess-fmt","createdAt":1787023345223,"cwd":"/tmp/project","delegationDepth":0,"agentPreset":"standard","version":VERSION}"#;
+
+        let v0_lines = [
+            header.replace("VERSION", "0"),
+            r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"turn":1,"content":[{"type":"text","text":"hi"}]}}"#.to_string(),
+            // request starts, first token, then usage
+            r#"{"type":"assistant/chunk","seq":2,"time":1787023347000,"data":{"turn":1,"step":1,"chunk":{"type":"block-start","index":0,"blockType":"text"}}}"#.to_string(),
+            r#"{"type":"assistant/chunk","seq":3,"time":1787023348000,"data":{"turn":1,"step":1,"chunk":{"type":"text-delta","index":0,"text":"hello"}}}"#.to_string(),
+            r#"{"type":"assistant/chunk","seq":4,"time":1787023349000,"data":{"turn":1,"step":1,"chunk":{"type":"usage","usage":{"inputTokens":100,"outputTokens":25,"reasoningTokens":5}}}}"#.to_string(),
+            r#"{"type":"assistant/message","seq":5,"time":1787023350000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}}"#.to_string(),
+        ];
+
+        // The same stream, folded into one `assistant/attempt` the way v2+ does.
+        let v2_lines = [
+            header.replace("VERSION", "4"),
+            r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"turn":1,"content":[{"type":"text","text":"hi"}]}}"#.to_string(),
+            r#"{"type":"assistant/attempt","seq":2,"time":1787023347000,"data":{"turn":1,"step":1,"stream":[{"type":"chunk","time":1787023347000,"chunk":{"type":"block-start","index":0,"blockType":"text"}},{"type":"chunk","time":1787023348000,"chunk":{"type":"text-delta","index":0,"text":"hello"}},{"type":"chunk","time":1787023349000,"chunk":{"type":"usage","usage":{"inputTokens":100,"outputTokens":25,"reasoningTokens":5}}}]}}"#.to_string(),
+            r#"{"type":"assistant/message","seq":5,"time":1787023350000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}}"#.to_string(),
+        ];
+
+        let parse = |lines: &[String]| {
+            let path = dir.path().join("session.jsonl.zstd");
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            create_dsh_session(&path, &refs);
+            parse_trajectory(&path).unwrap().1
+        };
+
+        let from_v0 = parse(&v0_lines);
+        let from_v2 = parse(&v2_lines);
+
+        assert_eq!(from_v0.len(), from_v2.len());
+        assert_eq!(from_v0.len(), 2);
+
+        let msg_v0 = from_v0
+            .iter()
+            .find(|e| e.event_type == "assistant-message")
+            .unwrap();
+        let msg_v2 = from_v2
+            .iter()
+            .find(|e| e.event_type == "assistant-message")
+            .unwrap();
+
+        // Timing comes from the streamed chunks in both shapes.
+        assert_eq!(msg_v0.ts, msg_v2.ts);
+        assert_eq!(msg_v0.duration_ms, msg_v2.duration_ms);
+        assert_eq!(msg_v0.ttft_ms, msg_v2.ttft_ms);
+        // 1787023348000 (first token) - 1787023347000 (request start)
+        assert_eq!(msg_v2.ttft_ms, Some(1000));
+        assert_eq!(msg_v2.duration_ms, Some(3000));
+
+        // Streamed usage is recovered in both shapes.
+        assert_eq!(msg_v0.input_tokens, msg_v2.input_tokens);
+        assert_eq!(msg_v0.output_tokens, msg_v2.output_tokens);
+        assert_eq!(msg_v0.reasoning_tokens, msg_v2.reasoning_tokens);
+        assert_eq!(msg_v2.input_tokens, Some(100));
+        assert_eq!(msg_v2.output_tokens, Some(25));
+        assert_eq!(msg_v2.reasoning_tokens, Some(5));
+
+        assert_eq!(msg_v0.content, msg_v2.content);
+    }
+
+    /// A log from a newer generation must not silently produce wrong numbers:
+    /// the chunks are still recovered (v2..v4 share one shape) and the version
+    /// is classified rather than assumed.
+    #[test]
+    fn newer_versions_still_recover_streamed_chunks() {
+        use crate::trajectory::parser::dsh_format::{classify, VersionSupport};
+        assert_eq!(classify(2), VersionSupport::Lowered(2));
+        assert_eq!(classify(4), VersionSupport::Lowered(4));
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl.zstd");
+        create_dsh_session(
+            &path,
+            &[
+                r#"{"type":"session","id":"sess-new","createdAt":1787023345223,"cwd":"/tmp","version":4}"#,
+                r#"{"type":"user/message","seq":1,"time":1787023346000,"data":{"turn":1,"content":[{"type":"text","text":"hi"}]}}"#,
+                r#"{"type":"assistant/attempt","seq":2,"time":1787023347000,"data":{"turn":1,"step":1,"stream":[{"type":"chunk","time":1787023347000,"chunk":{"type":"text-delta","index":0,"text":"x"}}]}}"#,
+                r#"{"type":"assistant/message","seq":3,"time":1787023349000,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"x"}]}}}"#,
+            ],
+        );
+
+        let (sid, events) = parse_trajectory(&path).unwrap();
+        assert_eq!(sid, "sess-new");
+        let msg = events
+            .iter()
+            .find(|e| e.event_type == "assistant-message")
+            .unwrap();
+        // first token at +0ms, complete at +2000ms
+        assert_eq!(msg.duration_ms, Some(2000));
+        assert_eq!(msg.ttft_ms, Some(0));
     }
 }

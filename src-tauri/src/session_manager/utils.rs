@@ -125,6 +125,11 @@ pub fn truncate(text: &str, max_chars: usize) -> String {
 /// Decode a project directory name like `D--DSH` → `D:/DSH`.
 ///
 /// Both Claude Code and DSH encode absolute paths this way.
+///
+/// This is a LOSSY encoding: every character outside `[A-Za-z0-9]` becomes
+/// `-`, so a name cannot distinguish a real separator from a dash, a dot, or
+/// a CJK character. Treat the result as a label, not a path; prefer
+/// `project_display_path`, which checks the filesystem.
 pub fn decode_project_name(name: &str) -> String {
     let mut result = name.to_string();
     if let Some(idx) = result.find("--") {
@@ -133,6 +138,62 @@ pub fn decode_project_name(name: &str) -> String {
         result = format!("{}:/{}", drive, rest.replace("--", "/").replace("---", "/"));
     }
     result
+}
+
+/// Recover a real directory from an encoded project name, checking the disk.
+///
+/// Because the encoding is lossy (see `decode_project_name`), the name is split
+/// at every `-` and a candidate is kept only when that directory exists. That
+/// resolves the ambiguity: `D--DSH-trajectory-viewer-src-tauri` could be
+/// `D:/DSH/trajectory-viewer-src-tauri` or `D:/DSH/trajectory-viewer/src-tauri`,
+/// and only the one on disk is returned.
+///
+/// Returns `None` when nothing matches - the project may simply have been
+/// deleted, in which case the caller falls back to the decoded label.
+pub fn resolve_project_path(encoded: &str) -> Option<String> {
+    // Expect `<drive>--<rest>`; a leading ASCII letter is the drive.
+    if encoded.len() < 4 || !encoded.as_bytes()[0].is_ascii_alphabetic() || &encoded[1..3] != "--" {
+        return None;
+    }
+    let drive = encoded[..1].to_ascii_uppercase();
+    let segments: Vec<&str> = encoded[3..].split('-').collect();
+
+    // Greedy walk: at each depth take the SHORTEST segment that exists on disk,
+    // so the split points are decided by what is really there rather than by
+    // guessing where the dashes were.
+    fn walk(segments: &[&str], prefix: &str, depth: usize) -> Option<String> {
+        if depth == segments.len() {
+            return Some(prefix.trim_end_matches('/').to_string());
+        }
+        for end in depth + 1..=segments.len() {
+            let segment = segments[depth..end].join("-");
+            if segment.is_empty() {
+                continue;
+            }
+            let candidate = format!("{prefix}{segment}");
+            if Path::new(&candidate).is_dir() {
+                if let Some(found) = walk(segments, &format!("{candidate}/"), end) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    walk(&segments, &format!("{drive}:/"), 0)
+}
+
+/// The path to show for a session's project.
+///
+/// Prefers the `cwd` the session itself recorded: that is the authoritative
+/// path and survives the lossy directory-name encoding, including non-ASCII
+/// segments. Falls back to a filesystem-verified decode, then to the decoded
+/// label so the UI still shows something recognizable for a deleted project.
+pub fn project_display_path(encoded: &str, cwd: Option<&str>) -> String {
+    if let Some(cwd) = cwd.map(str::trim).filter(|c| !c.is_empty()) {
+        return cwd.to_string();
+    }
+    resolve_project_path(encoded).unwrap_or_else(|| decode_project_name(encoded))
 }
 
 /// The last path segment of a directory, used to label a project group.
@@ -215,6 +276,61 @@ mod tests {
     fn decode_project_name_rebuilds_windows_paths() {
         assert_eq!(decode_project_name("D--DSH"), "D:/DSH");
         assert_eq!(decode_project_name("plain"), "plain");
+    }
+
+    // The encoded name is lossy, so the only way to recover the real path is to
+    // check the filesystem: `-` may be a separator or part of a directory name.
+    #[test]
+    fn resolve_project_path_uses_the_filesystem_to_split_dashes() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        // root/AI/ModHeader-refactor  and  root/AI/ModHeader
+        std::fs::create_dir_all(root.join("AI/ModHeader-refactor")).unwrap();
+        std::fs::create_dir_all(root.join("AI/ModHeader")).unwrap();
+
+        // Rebuild an encoded name from an absolute path, then resolve it.
+        let encode = |rel: &str| {
+            let abs = root.join(rel);
+            abs.to_string_lossy().replace(['\\', '/', ':'], "-")
+        };
+
+        // "AI-ModHeader-refactor" must resolve to the deeper directory, not
+        // stop at "AI-ModHeader" and leave "refactor" dangling.
+        let encoded = encode("AI/ModHeader-refactor");
+        let resolved = resolve_project_path(&encoded).expect("should resolve");
+        let expected = root
+            .join("AI/ModHeader-refactor")
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert_eq!(resolved.replace('\\', "/"), expected);
+    }
+
+    #[test]
+    fn resolve_project_path_returns_none_for_a_missing_directory() {
+        // A deleted project cannot be recovered; the caller falls back to a label.
+        assert_eq!(resolve_project_path("Z--definitely-not-here-xyz"), None);
+        // Not an encoded path at all.
+        assert_eq!(resolve_project_path("plain"), None);
+        assert_eq!(resolve_project_path(""), None);
+    }
+
+    // The recorded `cwd` is authoritative: it survives the lossy encoding,
+    // including non-ASCII segments that the directory name cannot represent.
+    #[test]
+    fn project_display_path_prefers_the_recorded_cwd() {
+        let shown = project_display_path("C--Users-----claude", Some(r"C:\Users\陈强\.claude"));
+        assert_eq!(shown, r"C:\Users\陈强\.claude");
+    }
+
+    #[test]
+    fn project_display_path_falls_back_to_the_decoded_label() {
+        // No cwd and nothing on disk: still show something recognizable rather
+        // than an empty group.
+        let shown = project_display_path("D--DSH", None);
+        assert_eq!(shown, "D:/DSH");
+        // A blank cwd is treated as absent, not as the path "".
+        assert_eq!(project_display_path("D--DSH", Some("   ")), "D:/DSH");
     }
 
     #[test]

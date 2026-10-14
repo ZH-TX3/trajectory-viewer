@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::session_manager::provider::SessionProvider;
 use crate::session_manager::utils::{
-    decode_project_name, dir_basename, extract_text, home_dir, truncate,
+    dir_basename, extract_text, home_dir, project_display_path, truncate,
 };
 use crate::session_manager::{SessionMessage, SessionMeta};
 use crate::trajectory::utils::{parse_timestamp_to_ms, read_head_tail_lines};
@@ -129,13 +129,16 @@ impl SessionProvider for ClaudeProvider {
             .or_else(|| first_user_message.map(|t| truncate(&t, 80)))
             .or_else(|| project_dir.as_deref().and_then(dir_basename));
 
+        // Computed before the literal below moves `project_dir`.
+        let project_group = project_group(path, project_dir.as_deref());
+
         Some(SessionMeta {
             provider_id: "claude".to_string(),
             session_id: session_id.clone(),
             title,
             summary: summary.map(|text| truncate(&text, 160)),
             project_dir,
-            project_group: project_group(path),
+            project_group,
             created_at,
             last_active_at,
             source_path: Some(path.to_string_lossy().to_string()),
@@ -265,12 +268,23 @@ fn is_user_line(value: &serde_json::Value) -> bool {
             == Some("user")
 }
 
-/// Claude encodes the project as the parent directory name (`D--DSH`).
-fn project_group(path: &Path) -> Option<String> {
-    path.parent()
+/// The project path to show for a session.
+///
+/// Claude encodes the project as the parent directory name (`D--DSH`), but that
+/// encoding is lossy — it cannot represent a dash, a dot, or a non-ASCII
+/// character, so `C--Users-----claude` is really `C:\Users\陈强\.claude`. The
+/// `cwd` recorded inside the session is authoritative, so it wins; the encoded
+/// name is only decoded (and checked against the filesystem) as a fallback for
+/// sessions that predate it or whose project has been deleted.
+fn project_group(path: &Path, cwd: Option<&str>) -> Option<String> {
+    let encoded = path
+        .parent()
         .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .map(decode_project_name)
+        .and_then(|n| n.to_str());
+    match encoded {
+        Some(encoded) => Some(project_display_path(encoded, cwd)),
+        None => cwd.map(|c| c.to_string()),
+    }
 }
 
 #[cfg(test)]

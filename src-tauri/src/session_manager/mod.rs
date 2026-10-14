@@ -14,6 +14,7 @@
 mod claude;
 mod codex;
 mod dsh;
+pub mod memory;
 mod opencode;
 mod provider;
 mod utils;

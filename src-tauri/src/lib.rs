@@ -22,6 +22,7 @@ pub fn run() {
             commands::get_subagent_messages,
             commands::list_sessions,
             commands::get_session_messages,
+            commands::get_project_memories,
             commands::delete_session,
             commands::delete_sessions_in_dir,
             commands::get_session_mtime,

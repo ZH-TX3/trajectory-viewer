@@ -119,6 +119,30 @@ export interface SessionMeta {
   resumeCommand?: string | null;
 }
 
+/**
+ * One Markdown memory document for a project.
+ *
+ * Claude keeps these in `memory/` beside the session files, so every
+ * session of a project sees the same set.
+ */
+export interface MemoryDoc {
+  /** File name, e.g. `feedback_quantified_eval.md`. */
+  fileName: string;
+  /** Frontmatter `name`, when present. */
+  name?: string | null;
+  /** One-line summary shown in the list. */
+  description?: string | null;
+  /** `feedback` | `project` | `reference`. */
+  kind?: string | null;
+  /** The session that wrote this memory. */
+  originSessionId?: string | null;
+  updatedAt?: number | null;
+  /** `MEMORY.md` is the project index, not a single fact. */
+  isIndex: boolean;
+  /** Markdown body, frontmatter stripped. */
+  content: string;
+}
+
 export interface SessionMessage {
   role: string;
   content: string;

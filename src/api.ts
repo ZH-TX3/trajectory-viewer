@@ -27,6 +27,7 @@ import type {
   ResumeSettings,
   ProviderCommand,
   TerminalStatus,
+  MemoryDoc,
 } from './types';
 
 export const api = {
@@ -153,6 +154,11 @@ export const api = {
     cwd: string | null,
   ): Promise<ResumeOutcome> {
     return await invoke('resume_session_in_terminal', { providerId, sessionId, cwd });
+  },
+
+  /** Markdown memory documents for the project this session belongs to. */
+  async getProjectMemories(sourcePath: string): Promise<MemoryDoc[]> {
+    return await invoke('get_project_memories', { sourcePath });
   },
 
   /** Whether a provider's configured resume command can actually be started. */

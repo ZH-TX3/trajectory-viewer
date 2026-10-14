@@ -55,6 +55,14 @@ pub async fn list_sessions() -> Result<Vec<session_manager::SessionMeta>, String
         .map_err(|e| format!("Scanning sessions failed: {e}"))
 }
 
+/// Markdown memory documents recorded for the project a session belongs to.
+///
+/// Empty for projects that never wrote one, which is the common case.
+#[tauri::command]
+pub fn get_project_memories(source_path: String) -> Vec<session_manager::memory::MemoryDoc> {
+    session_manager::memory::load_memories(std::path::Path::new(&source_path))
+}
+
 #[tauri::command]
 pub fn get_session_messages(
     provider_id: String,

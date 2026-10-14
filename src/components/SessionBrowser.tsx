@@ -10,6 +10,8 @@ import { TrajectoryView } from './TrajectoryView';
 import { TrajectoryErrorBoundary } from './TrajectoryErrorBoundary';
 import { SidebarSearch } from './SidebarSearch';
 import { SubagentCard } from './SubagentCard';
+import { MemoryTree, MemoryViewer } from './MemoryPanel';
+import type { OpenMemory } from './MemoryPanel';
 import type { ProviderCommand, SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import { cn } from '../lib/utils';
 import { isTaskNotification, parseTaskNotification, resumeCommandText } from '../utils/format';
@@ -173,6 +175,9 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   const [loading, setLoading] = useState(true);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('messages');
+  // The memory document open in the right panel, if any. Takes precedence
+  // over the session view so the sidebar reads as a file tree.
+  const [openMemory, setOpenMemory] = useState<OpenMemory | null>(null);
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>(() => {
     // Default to the first enabled provider tab so we don't scan/load every
     // tool's sessions on startup; fall back to 'all' only if none is enabled.
@@ -495,6 +500,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
 
   const handleSelectSession = useCallback((key: string) => {
     setSelectedKey(key);
+    setOpenMemory(null);
     // Keep the current tab (Messages / Trajectory) across session switches.
     setTrajectoryData(null);
     setFocusTs(null);
@@ -846,6 +852,22 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                       </div>
                     </div>
 
+                    {/* The project's memory/ directory, above its sessions. */}
+                    {isExpanded && (() => {
+                      // Any session resolves to the same memory dir; the
+                      // selected one marks which documents it wrote.
+                      const first = group.sessions[0];
+                      if (first?.sourcePath == null) return null;
+                      return (
+                        <MemoryTree
+                          sourcePath={first.sourcePath}
+                          projectPath={group.groupName}
+                          selectedFileName={openMemory?.doc.fileName ?? null}
+                          onOpen={setOpenMemory}
+                        />
+                      );
+                    })()}
+
                     {/* Sessions in group */}
                     {isExpanded && group.sessions.map((session) => {
                       const key = `${session.providerId}::${session.sessionId}`;
@@ -951,7 +973,13 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
 
       {/* Right panel */}
       <main className="flex-1 flex flex-col min-w-0">
-        {!selectedSession ? (
+        {/* A memory document takes over the panel while it is open. */}
+        {openMemory !== null ? (
+          <MemoryViewer
+            memory={openMemory}
+            fromSessionId={selectedSession?.sessionId ?? null}
+          />
+        ) : !selectedSession ? (
           <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">
             Select a session to view
           </div>

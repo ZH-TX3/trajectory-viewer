@@ -377,9 +377,12 @@ fn push_assistant_events(
 ) {
     let message = &json["message"];
     let assistant_step = *current_step;
+    let usage = Usage::read(message, json);
     let mut text_parts: Vec<String> = Vec::new();
     let mut thinking_parts: Vec<String> = Vec::new();
     let mut saw_tool_use = false;
+    // Index of the first tool-call this record pushes, if it pushes any.
+    let mut first_tool_call: Option<usize> = None;
 
     if let Some(items) = message["content"].as_array() {
         for item in items {
@@ -412,6 +415,9 @@ fn push_assistant_events(
                     );
                 }
 
+                if first_tool_call.is_none() {
+                    first_tool_call = Some(events.len());
+                }
                 events.push(TrajectoryEvent {
                     seq: *seq,
                     ts,
@@ -474,15 +480,6 @@ fn push_assistant_events(
             .as_str()
             .or_else(|| message["model"].as_str())
             .map(|s| s.to_string());
-        let input_tokens = message["usage"]["input"]
-            .as_i64()
-            .or_else(|| json["usage"]["input"].as_i64());
-        let output_tokens = message["usage"]["output"]
-            .as_i64()
-            .or_else(|| json["usage"]["output"].as_i64());
-        let reasoning_tokens = message["usage"]["reasoning"]
-            .as_i64()
-            .or_else(|| json["usage"]["reasoning"].as_i64());
 
         events.push(TrajectoryEvent {
             seq: *seq,
@@ -500,15 +497,64 @@ fn push_assistant_events(
             step: Some(if saw_tool_use { 1 } else { assistant_step }),
             duration_ms: None,
             ttft_ms: None,
-            input_tokens,
-            output_tokens,
-            reasoning_tokens,
-            cache_read_tokens: json["usage"]["cache_read_input_tokens"].as_i64(),
-            cache_write_tokens: json["usage"]["cache_creation_input_tokens"].as_i64(),
+            input_tokens: usage.input,
+            output_tokens: usage.output,
+            reasoning_tokens: usage.reasoning,
+            cache_read_tokens: usage.cache_read,
+            cache_write_tokens: usage.cache_write,
             model,
             provider: Some("claude".to_string()),
         });
+    } else if let Some(index) = first_tool_call {
+        // A record that only calls tools is still a paid request. Emitting
+        // nothing for it dropped half the records of a real session and
+        // almost all of its tokens, which left the usage view nearly empty.
+        // The request's usage rides on the first call it produced.
+        let event = &mut events[index];
+        event.input_tokens = usage.input;
+        event.output_tokens = usage.output;
+        event.reasoning_tokens = usage.reasoning;
+        event.cache_read_tokens = usage.cache_read;
+        event.cache_write_tokens = usage.cache_write;
     }
+}
+
+/// Token accounting for one assistant message.
+///
+/// Claude Code puts `usage` on the message (not on the JSONL line) and spells
+/// every counter `*_tokens` - `input_tokens`, `output_tokens`,
+/// `cache_read_input_tokens`, `cache_creation_input_tokens`. Reading the short
+/// names, or reading from the line, silently yielded `None` for every real
+/// session; the short names stay as a fallback so older files still parse.
+#[derive(Default, Clone, Copy)]
+struct Usage {
+    input: Option<i64>,
+    output: Option<i64>,
+    reasoning: Option<i64>,
+    cache_read: Option<i64>,
+    cache_write: Option<i64>,
+}
+
+impl Usage {
+    fn read(message: &Value, line: &Value) -> Self {
+        Self {
+            input: usage_number(message, line, &["input_tokens", "input"]),
+            output: usage_number(message, line, &["output_tokens", "output"]),
+            reasoning: usage_number(message, line, &["reasoning_tokens", "reasoning"]),
+            cache_read: usage_number(message, line, &["cache_read_input_tokens"]),
+            cache_write: usage_number(message, line, &["cache_creation_input_tokens"]),
+        }
+    }
+}
+
+/// The first of `keys` present as an integer under `message.usage` or
+/// `line.usage`.
+fn usage_number(message: &Value, line: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        message["usage"][key]
+            .as_i64()
+            .or_else(|| line["usage"][key].as_i64())
+    })
 }
 
 // ── Text extraction helpers ───────────────────────────────────────────────
@@ -782,6 +828,59 @@ mod tests {
         assert_eq!(events[1].output_tokens, Some(5));
         assert_eq!(events[1].reasoning_tokens, Some(2));
         assert_eq!(events[1].model.as_deref(), Some("claude-sonnet-4"));
+    }
+
+    // A real session puts `usage` on the message and spells every counter
+    // `*_tokens`. The fixture above uses short names on the line, which the
+    // parser accepted while every real session yielded `None` for all four.
+    #[test]
+    fn parse_reads_real_usage_field_names() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-u\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"hi\",\"usage\":{\"input_tokens\":4,\"output_tokens\":210,\"cache_read_input_tokens\":20000,\"cache_creation_input_tokens\":12345}},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        assert_eq!(events[0].input_tokens, Some(4));
+        assert_eq!(events[0].output_tokens, Some(210));
+        assert_eq!(events[0].cache_read_tokens, Some(20000));
+        assert_eq!(events[0].cache_write_tokens, Some(12345));
+    }
+
+    // A tool-only assistant record produces no message event, so its usage
+    // vanished with it — in a real session that is half the records and almost
+    // all the tokens. It now rides on the first call the record made.
+    #[test]
+    fn parse_keeps_the_usage_of_a_tool_only_record() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-to\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"go\"},\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}],\"usage\":{\"input_tokens\":4,\"output_tokens\":90,\"cache_read_input_tokens\":20000,\"cache_creation_input_tokens\":12345}},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        let call = events
+            .iter()
+            .find(|e| e.event_type == "tool-call")
+            .expect("tool-call event");
+        assert_eq!(call.input_tokens, Some(4));
+        assert_eq!(call.output_tokens, Some(90));
+        assert_eq!(call.cache_read_tokens, Some(20000));
+        assert_eq!(call.cache_write_tokens, Some(12345));
+        // Nothing is invented: the record still yields no message row.
+        assert_eq!(events.len(), 2);
     }
 
     #[test]

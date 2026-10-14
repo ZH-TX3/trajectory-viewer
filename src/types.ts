@@ -436,3 +436,33 @@ export interface ResumeOutcome {
   /** The recorded working directory no longer exists. */
   cwdMissing: boolean;
 }
+
+// ── Update check ─────────────────────────────────────────────────────────
+
+/** Outcome of asking GitHub for the newest release. */
+export interface UpdateCheck {
+  /** Version this build was compiled as. */
+  currentVersion: string;
+  /** Newest published version, when one could be read. */
+  latestVersion: string | null;
+  /** A newer version exists and the user has not skipped it. */
+  hasUpdate: boolean;
+  /** A newer version exists, but the user asked not to be told about it. */
+  skipped: boolean;
+  /** Release page to open for the download. */
+  releaseUrl: string;
+  releaseNotes: string | null;
+  publishedAt: string | null;
+  /** Unix ms the check completed. */
+  checkedAt: number;
+}
+
+/** Update preferences, persisted backend-side. */
+export interface UpdateSettings {
+  /** Check for a new release automatically when the app starts. */
+  autoCheck: boolean;
+  /** Unix ms of the last check (any outcome), used to throttle auto-checks. */
+  lastCheckedAt: number | null;
+  /** A version the user asked not to be told about again. */
+  skippedVersion: string | null;
+}

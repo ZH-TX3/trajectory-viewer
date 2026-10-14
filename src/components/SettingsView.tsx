@@ -1,8 +1,9 @@
 // ── Settings View ────────────────────────────────────────────────────────
 //
-// Full-page settings (pattern: cc-switch) split into two tabs:
+// Full-page settings (pattern: cc-switch) split into three tabs:
 //   General  → which tools are scanned + their display order (drag to reorder)
 //   Advanced → session backup & restore (cc-switch setup)
+//   About    → version + update check
 // Future sections slot in as more tabs or sections below.
 
 import { useState } from 'react';
@@ -32,8 +33,9 @@ import { ResumeSection } from './ResumeSection';
 import { TrashSection } from './TrashSection';
 import { SearchIndexSection } from './SearchIndexSection';
 import { ToolRootsSection } from './config-hub/ToolRootsSection';
+import { UpdateSection } from './UpdateSection';
 
-type SettingsTab = 'general' | 'advanced';
+type SettingsTab = 'general' | 'advanced' | 'about';
 
 interface SettingsViewProps {
   enabledProviders: ReadonlySet<string>;
@@ -158,6 +160,7 @@ export function SettingsView({
   const TABS: Array<{ id: SettingsTab; label: string }> = [
     { id: 'general', label: 'General' },
     { id: 'advanced', label: 'Advanced' },
+    { id: 'about', label: 'About' },
   ];
 
   return (
@@ -278,6 +281,19 @@ export function SettingsView({
 
                 </section>
             </>
+          )}
+
+          {tab === 'about' && (
+            <section className="rounded-xl border border-border/40 overflow-hidden">
+              <div className="px-4 py-3 border-b border-border/40">
+                <h2 className="text-xs font-medium">Updates</h2>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Compares this build against the newest release on GitHub. A download opens in
+                  your browser.
+                </p>
+              </div>
+              <UpdateSection />
+            </section>
           )}
         </div>
       </div>

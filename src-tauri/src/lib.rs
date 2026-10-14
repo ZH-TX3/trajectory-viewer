@@ -9,6 +9,7 @@ mod search;
 mod session_manager;
 mod trajectory;
 mod trash;
+mod update;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -72,6 +73,12 @@ pub fn run() {
             commands::search_sessions,
             commands::search_index_status,
             commands::reindex_search,
+            commands::check_for_updates,
+            commands::auto_check_for_updates,
+            commands::get_update_settings,
+            commands::set_update_settings,
+            commands::skip_update_version,
+            commands::open_release_page,
         ])
         .setup(|_app| {
             // Background auto-backup: run a pass on startup, then every 5 min.

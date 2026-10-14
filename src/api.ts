@@ -28,6 +28,8 @@ import type {
   ProviderCommand,
   TerminalStatus,
   MemoryDoc,
+  UpdateCheck,
+  UpdateSettings,
 } from './types';
 
 export const api = {
@@ -364,5 +366,37 @@ export const api = {
   /** Refresh the search index (streams `search-index-progress` events). */
   async reindexSearch(providers: string[], force = false): Promise<unknown> {
     return await invoke('reindex_search', { providers, force });
+  },
+
+  // ── Update check ───────────────────────────────────────────────────────
+
+  /** Ask GitHub for the newest release, unconditionally. */
+  async checkForUpdates(): Promise<UpdateCheck> {
+    return await invoke('check_for_updates');
+  },
+
+  /** The same check, but skipped when disabled or still throttled (`null`). */
+  async autoCheckForUpdates(): Promise<UpdateCheck | null> {
+    return await invoke('auto_check_for_updates');
+  },
+
+  /** Update preferences (auto-check toggle, last check, skipped version). */
+  async getUpdateSettings(): Promise<UpdateSettings> {
+    return await invoke('get_update_settings');
+  },
+
+  /** Persist update preferences. */
+  async setUpdateSettings(settings: UpdateSettings): Promise<void> {
+    await invoke('set_update_settings', { settings });
+  },
+
+  /** Stop reporting one version as an available update (`null` clears it). */
+  async skipUpdateVersion(version: string | null): Promise<void> {
+    await invoke('skip_update_version', { version });
+  },
+
+  /** Open one of this project's release pages in the system browser. */
+  async openReleasePage(url: string): Promise<void> {
+    await invoke('open_release_page', { url });
   },
 };

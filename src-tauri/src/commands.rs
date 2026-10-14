@@ -74,11 +74,7 @@ pub fn save_project_memory(
     file_name: String,
     content: String,
 ) -> Result<(), String> {
-    session_manager::memory::save_memory(
-        std::path::Path::new(&source_path),
-        &file_name,
-        &content,
-    )
+    session_manager::memory::save_memory(std::path::Path::new(&source_path), &file_name, &content)
 }
 
 #[tauri::command]
@@ -316,4 +312,59 @@ pub fn get_resume_settings() -> crate::resume::ResumeSettings {
 #[tauri::command]
 pub fn set_resume_settings(settings: crate::resume::ResumeSettings) -> Result<(), String> {
     crate::resume::set_settings(&settings)
+}
+
+// ── Update check ─────────────────────────────────────────────────────────
+
+/// Ask GitHub for the newest release and compare it with this build.
+///
+/// Offloaded: the HTTP call is blocking.
+#[tauri::command]
+pub async fn check_for_updates() -> Result<crate::update::UpdateCheck, String> {
+    tauri::async_runtime::spawn_blocking(crate::update::check)
+        .await
+        .map_err(|e| format!("Update check task failed: {e}"))?
+}
+
+/// The same check, but only when the user enabled it and the throttle window
+/// has passed. `None` means "not due", which is not an error.
+#[tauri::command]
+pub async fn auto_check_for_updates() -> Result<Option<crate::update::UpdateCheck>, String> {
+    tauri::async_runtime::spawn_blocking(crate::update::auto_check)
+        .await
+        .map_err(|e| format!("Update check task failed: {e}"))?
+}
+
+/// Current update preferences (auto-check toggle, last check, skipped version).
+#[tauri::command]
+pub fn get_update_settings() -> crate::update::UpdateSettings {
+    crate::update::get_settings()
+}
+
+/// Persist update preferences.
+#[tauri::command]
+pub fn set_update_settings(settings: crate::update::UpdateSettings) -> Result<(), String> {
+    crate::update::set_settings(&settings)
+}
+
+/// Stop mentioning one version as an available update (`None` clears the skip).
+#[tauri::command]
+pub fn skip_update_version(version: Option<String>) -> Result<(), String> {
+    crate::update::set_skipped_version(version)
+}
+
+/// Open one of this project's release pages in the system browser.
+///
+/// The URL is checked against the repo prefix first, so this cannot be used as
+/// a general-purpose opener for arbitrary links.
+#[tauri::command]
+pub fn open_release_page(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    if !crate::update::is_allowed_external_url(&url) {
+        return Err(format!("Refusing to open a non-release url: {url}"));
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("Cannot open the release page: {e}"))
 }

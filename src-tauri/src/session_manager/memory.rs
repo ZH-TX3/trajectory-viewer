@@ -155,12 +155,8 @@ pub fn save_memory(session_path: &Path, file_name: &str, content: &str) -> Resul
     }
     out.push_str(content);
 
-    std::fs::write(&resolved_target, out).map_err(|e| {
-        format!(
-            "Cannot write {}: {e}",
-            resolved_target.display()
-        )
-    })
+    std::fs::write(&resolved_target, out)
+        .map_err(|e| format!("Cannot write {}: {e}", resolved_target.display()))
 }
 
 /// Split leading `---` frontmatter from the Markdown body.
@@ -360,15 +356,22 @@ description: real desc
         let dir = tempdir().unwrap();
         let session = dir.path().join("proj/sess.jsonl");
         let memory = dir.path().join("proj/memory");
-        write(&memory, "plain.md", "# Old
+        write(
+            &memory,
+            "plain.md",
+            "# Old
 
 text
-");
+",
+        );
 
         save_memory(&session, "plain.md", "# New\n\ntext\n").unwrap();
 
         let after = std::fs::read_to_string(memory.join("plain.md")).unwrap();
-        assert!(after.starts_with("# New"), "no frontmatter is invented: {after:?}");
+        assert!(
+            after.starts_with("# New"),
+            "no frontmatter is invented: {after:?}"
+        );
         assert!(!after.contains("# Old"));
     }
 
@@ -396,6 +399,7 @@ text
         );
     }
 
+    #[test]
     fn a_project_without_a_memory_directory_is_refused() {
         let dir = tempdir().unwrap();
         let session = dir.path().join("proj/sess.jsonl");

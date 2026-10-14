@@ -6,7 +6,8 @@
 // an empty box.
 
 import { useCallback, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Loader2, Pencil, RotateCcw, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Eye, FileText, Loader2, Pencil, RotateCcw, X } from 'lucide-react';
+import { MarkdownBody } from '../MarkdownBody';
 import type { ConfigFileContent, ToolConfigs } from '../../types';
 import { api } from '../../api';
 import { cn } from '../../lib/utils';
@@ -84,7 +85,13 @@ function FileBlock({
   const original = file.content ?? '';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(original);
+  const [previewing, setPreviewing] = useState(false);
+  // A long file is clipped until expanded. Previewing a Markdown file expands
+  // it on its own — a rendered document cut off after three lines reads as a
+  // rendering bug rather than a clip — so for Markdown the expanded state is
+  // simply derived rather than stored.
   const [expanded, setExpanded] = useState(false);
+  const showExpanded = previewing || expanded;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -128,6 +135,9 @@ function FileBlock({
   // JSON files get a format action; other formats (md/toml/yaml) have no
   // generic reformatter, so the button is hidden for them.
   const isJson = file.format === 'json';
+  // A Markdown prompt (CLAUDE.md / AGENTS.md) can be previewed; the
+  // other formats have no renderer here, so they stay raw.
+  const isMarkdown = file.format === 'markdown';
   const formatDraft = useCallback(() => {
     try {
       setDraft(JSON.stringify(JSON.parse(draft), null, 2));
@@ -138,7 +148,10 @@ function FileBlock({
   }, [draft]);
 
   return (
-    <div className="px-3 py-2">
+    // `text-[10px]` is the panel's base font size, and everything inside
+    // inherits it — including a Markdown preview, whose headings and code are
+    // sized in `em`.
+    <div className="px-3 py-2 text-[10px]">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-[11px] font-medium">{file.label}</span>
         <StatusBadge exists={file.exists} dirty={dirty} editing={editing} />
@@ -186,10 +199,23 @@ function FileBlock({
             <>
               {file.exists && file.content && file.content.length > 400 && (
                 <button
-                  onClick={() => setExpanded((v) => !v)}
-                  className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
+                  onClick={() =>
+                    isMarkdown
+                      ? setPreviewing((v) => !v)
+                      : setExpanded((v) => !v)
+                  }
+                  className="inline-flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
                 >
-                  {expanded ? 'collapse' : 'expand'}
+                  {isMarkdown ? (
+                    <>
+                      {previewing ? <FileText className="size-3" /> : <Eye className="size-3" />}
+                      {previewing ? 'Source' : 'Preview'}
+                    </>
+                  ) : showExpanded ? (
+                    'collapse'
+                  ) : (
+                    'expand'
+                  )}
                 </button>
               )}
               <button
@@ -226,14 +252,27 @@ function FileBlock({
           className="w-full text-[10px] leading-relaxed font-mono bg-transparent border border-[hsl(var(--border))] rounded p-2 h-[70vh] min-h-64 resize-y focus:outline-none focus:ring-1 focus:ring-blue-400"
         />
       ) : file.exists ? (
-        <pre
-          className={cn(
-            'text-[10px] leading-relaxed whitespace-pre-wrap break-all rounded bg-muted/30 p-2 overflow-auto',
-            expanded ? 'max-h-96' : 'max-h-24',
-          )}
-        >
-          {original || '(empty)'}
-        </pre>
+        isMarkdown && previewing ? (
+          // The panel's own `text-[10px]` drives the scale: MarkdownBody sizes
+          // its headings and code in `em`, and this panel has a smaller base
+          // than the rest of the app.
+          <MarkdownBody
+            source={original}
+            className={cn(
+              'leading-relaxed rounded bg-muted/30 p-2 overflow-auto',
+              showExpanded ? 'max-h-96' : 'max-h-24',
+            )}
+          />
+        ) : (
+          <pre
+            className={cn(
+              'text-[10px] leading-relaxed whitespace-pre-wrap break-all rounded bg-muted/30 p-2 overflow-auto',
+              showExpanded ? 'max-h-96' : 'max-h-24',
+            )}
+          >
+            {original || '(empty)'}
+          </pre>
+        )
       ) : (
         <div className="text-[10px] text-muted-foreground">
           File does not exist. Click edit to create it.

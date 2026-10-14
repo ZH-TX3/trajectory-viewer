@@ -19,14 +19,7 @@ import {
   KIND_LABEL,
 } from '../utils/format';
 import { cn } from '../lib/utils';
-import {
-  formatCodeBlock,
-  JSON_KEY_COLOR,
-  JSON_VALUE_COLOR,
-  parseInline,
-  parseMarkdownBlocks,
-  tokenizeJson,
-} from '../utils/markdown';
+import { MarkdownBody } from './MarkdownBody';
 import { X, ChevronRight } from 'lucide-react';
 
 interface TrajectoryDetailProps {
@@ -497,32 +490,6 @@ function TimingTab({ cell }: { cell: TrajectoryCellProps }) {
   return <TimingPanel cell={cell} />;
 }
 
-/** One code block, with JSON keys and values tinted apart. */
-function CodeBlock({ lang, content }: { lang: string; content: string }) {
-  const body = formatCodeBlock(lang, content);
-  return (
-    <pre className="text-[10px] font-mono whitespace-pre-wrap break-all leading-relaxed bg-muted/50 rounded p-2 overflow-auto">
-      {lang === 'json'
-        ? tokenizeJson(body).map((token, i) => (
-            <span
-              key={i}
-              style={
-                token.kind === 'key'
-                  ? { color: JSON_KEY_COLOR }
-                  : token.kind === 'value'
-                    ? { color: JSON_VALUE_COLOR }
-                    : undefined
-              }
-              className={token.kind === 'plain' ? 'text-foreground/70' : undefined}
-            >
-              {token.text}
-            </span>
-          ))
-        : <span className="text-foreground/80">{body}</span>}
-    </pre>
-  );
-}
-
 /** A collapsible "Thinking" sub-block shown inside the preview, above the body.
  *  Mirrors the reference layout: the reasoning folds away by default and the
  *  message body stays visible underneath it. */
@@ -549,33 +516,21 @@ function ThinkingBlock({ text }: { text: string }) {
 }
 
 /**
- * Render the Markdown-ish preview the trajectory produces (`**Tool**` + a
- * fenced code block). JSON bodies are pretty-printed so a one-line argument
- * object reads as indented JSON instead of a wall of text.
+ * Render a tool record's preview as Markdown.
+ *
+ * The trajectory builds these from a tool call (`**Read**` plus a fenced
+ * `json` block holding its arguments) or from a tool result, so this is real
+ * Markdown and goes through the same renderer the memory documents use. The
+ * one difference is the code block: JSON bodies are pretty-printed and tinted
+ * by `CodeBlock`, which is why they are re-emitted here rather than left to
+ * the renderer.
  */
 function MarkdownPreview({ text }: { text: string }) {
-  const blocks = parseMarkdownBlocks(text);
-  if (blocks.length === 0) return null;
   return (
-    <div className="space-y-2">
-      {blocks.map((block, i) =>
-        block.type === 'code' ? (
-          <CodeBlock key={i} lang={block.lang} content={block.content} />
-        ) : (
-          <p key={i} className="text-xs text-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
-            {parseInline(block.content).map((seg, j) =>
-              seg.bold ? (
-                <span key={j} className="font-medium text-foreground">
-                  {seg.text}
-                </span>
-              ) : (
-                <span key={j}>{seg.text}</span>
-              ),
-            )}
-          </p>
-        ),
-      )}
-    </div>
+    <MarkdownBody
+      source={text}
+      className="text-foreground/80 leading-relaxed [&_.md-pre]:bg-muted/30"
+    />
   );
 }
 

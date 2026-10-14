@@ -17,6 +17,7 @@ import { ChevronDown, ChevronRight, FileText, FolderOpen, Star } from 'lucide-re
 import { api } from '../api';
 import { cn } from '../lib/utils';
 import type { MemoryDoc } from '../types';
+import { MarkdownPane } from './MarkdownPane';
 
 /** Colour per frontmatter `type`, matching the app's existing palette. */
 const KIND_STYLES: Record<string, string> = {
@@ -33,7 +34,10 @@ export interface OpenMemory {
 }
 
 /**
- * The `memory/` node for one project group.
+ * The `memory/` node for one project group, in the sidebar.
+ *
+ * A document's name is bold — the file name is in `text-muted-foreground`
+ * below it, and without the weight the two lines read as one run-on row.
  *
  * `sourcePath` is any session file in the group — the memory directory is a
  * sibling of the session files, so they all resolve to the same one.
@@ -108,7 +112,7 @@ export function MemoryTree({
             )}
             <span className="flex-1 min-w-0">
               <span className="flex items-center gap-1 min-w-0">
-                <span className="text-[10px] truncate">
+                <span className="text-[10px] font-semibold truncate">
                   {doc.name ?? doc.fileName.replace(/\.md$/i, '')}
                 </span>
                 {doc.kind != null && (
@@ -136,13 +140,13 @@ export function MemoryTree({
 }
 
 /**
- * Render a memory body in the right panel.
+ * Render a memory document in the right panel.
  *
- * Deliberately not a Markdown renderer: memory files are prose with headings
- * and lists, and the app has no Markdown dependency. Headings, list markers
- * and blank lines are enough to make one readable, and anything else stays
- * literal rather than being silently dropped.
+ * The body is the file's exact text behind a Source / Preview switch (see
+ * `MarkdownPane`) — the raw Markdown is what the file actually stores, so it
+ * is the default view and rendering is opt-in.
  */
+
 export function MemoryViewer({
   memory,
   fromSessionId,
@@ -190,46 +194,11 @@ export function MemoryViewer({
         </div>
       )}
 
-      <div className="flex-1 overflow-auto px-4 py-3">
-        <div className="space-y-1 max-w-3xl">
-          {doc.content.split('\n').map((line, i) => {
-            const trimmed = line.trim();
-            if (trimmed === '') return <div key={i} className="h-2" />;
-
-            const heading = trimmed.match(/^(#{1,6})\s+(.*)$/);
-            if (heading) {
-              const level = heading[1].length;
-              return (
-                <div
-                  key={i}
-                  className={cn(
-                    'font-semibold text-foreground',
-                    level === 1 ? 'text-sm mt-2' : level === 2 ? 'text-xs mt-1.5' : 'text-[11px] mt-1',
-                  )}
-                >
-                  {heading[2]}
-                </div>
-              );
-            }
-
-            const bullet = trimmed.match(/^([-*]|\d+\.)\s+(.*)$/);
-            if (bullet) {
-              return (
-                <div key={i} className="flex gap-1.5 text-xs text-foreground/85 leading-relaxed">
-                  <span className="text-muted-foreground/60 shrink-0">{bullet[1]}</span>
-                  <span className="whitespace-pre-wrap break-words min-w-0">{bullet[2]}</span>
-                </div>
-              );
-            }
-
-            return (
-              <div key={i} className="text-xs text-foreground/85 whitespace-pre-wrap break-words leading-relaxed">
-                {line}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <MarkdownPane
+        className="flex-1 px-4 py-3"
+        source={doc.content}
+        label={doc.fileName}
+      />
     </>
   );
 }

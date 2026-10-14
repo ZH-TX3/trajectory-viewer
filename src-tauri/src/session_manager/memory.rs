@@ -137,10 +137,12 @@ fn front_field(front: Option<&str>, key: &str) -> Option<String> {
         if indent == 0 {
             in_metadata = content.trim_end_matches(':').trim() == "metadata";
         }
-        // `type` and `originSessionId` live under `metadata:`; `name` and
-        // `description` are top level. Accept either so a file that inlines
-        // them still resolves.
-        let (k, v) = content.split_once(':')?;
+        // A line without a colon is not a key/value pair (a bare list item, a
+        // stray `---`). Skipping it is required: `?` here would abort the whole
+        // scan and silently drop every field after it.
+        let Some((k, v)) = content.split_once(':') else {
+            continue;
+        };
         if k.trim() != key {
             continue;
         }
@@ -148,8 +150,9 @@ fn front_field(front: Option<&str>, key: &str) -> Option<String> {
         if value.is_empty() {
             continue;
         }
-        // A top-level key only counts at indent 0; a nested one only inside
-        // `metadata:`. This keeps a `name:` in the body from matching.
+        // `type` and `originSessionId` live under `metadata:`; `name` and
+        // `description` are top level. Accept either so a file that inlines
+        // them still resolves, but keep a `name:` in the body from matching.
         let at_top = indent == 0 && !in_metadata;
         if at_top || in_metadata {
             return Some(value.to_string());
@@ -206,6 +209,20 @@ mod tests {
         assert_eq!(
             front_field(Some(front), "originSessionId").as_deref(),
             Some("abc-123")
+        );
+    }
+
+    // Regression: `split_once(':')?` aborted the whole scan on a line with
+    // no colon, silently dropping every field after it.
+    #[test]
+    fn a_colonless_line_does_not_abort_the_scan() {
+        let front = "name: my-fact
+---
+description: real desc
+";
+        assert_eq!(
+            front_field(Some(front), "description").as_deref(),
+            Some("real desc")
         );
     }
 

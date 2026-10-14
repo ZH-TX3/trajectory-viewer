@@ -6,11 +6,12 @@
 // an empty box.
 
 import { useCallback, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Eye, FileText, Loader2, Pencil, RotateCcw, X } from 'lucide-react';
-import { MarkdownBody } from '../MarkdownBody';
+import { ChevronDown, ChevronRight, Pencil } from 'lucide-react';
+import { MarkdownPane } from '../MarkdownPane';
 import type { ConfigFileContent, ToolConfigs } from '../../types';
 import { api } from '../../api';
 import { cn } from '../../lib/utils';
+import { useMarkdownEditor } from '../../utils/useMarkdownEditor';
 import { ToolIcon } from '../icons/BrandIcons';
 
 interface ConfigPanelProps {
@@ -83,54 +84,31 @@ function FileBlock({
   onSaved: () => void;
 }) {
   const original = file.content ?? '';
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(original);
-  const [previewing, setPreviewing] = useState(false);
   // A long file is clipped until expanded. Previewing a Markdown file expands
   // it on its own — a rendered document cut off after three lines reads as a
   // rendering bug rather than a clip — so for Markdown the expanded state is
   // simply derived rather than stored.
   const [expanded, setExpanded] = useState(false);
-  const showExpanded = previewing || expanded;
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const showExpanded = expanded;
 
-  const startEdit = useCallback(() => {
-    setDraft(original);
-    setError(null);
-    setEditing(true);
-  }, [original]);
+  const editor = useMarkdownEditor({
+    original,
+    save: (content) => api.configHubSaveConfig(toolId, file.path, content),
+    onSaved,
+  });
 
-  const cancel = useCallback(() => {
-    setEditing(false);
-    setDraft(original);
-    setError(null);
-  }, [original]);
-
-  const save = useCallback(async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await api.configHubSaveConfig(toolId, file.path, draft);
-      setEditing(false);
-      onSaved();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setSaving(false);
-    }
-  }, [toolId, file.path, draft, onSaved]);
-
+  // Opening in VS Code is a user action with a real failure mode (no VS Code
+  // installed, the file is locked), and it happens outside the edit flow, so it
+  // keeps its own error slot rather than borrowing the editor's.
+  const [openError, setOpenError] = useState<string | null>(null);
   const openInEditor = useCallback(async () => {
-    setError(null);
     try {
       await api.configHubOpenConfig(toolId, file.path);
+      setOpenError(null);
     } catch (err) {
-      setError(String(err));
+      setOpenError(String(err));
     }
   }, [toolId, file.path]);
-
-  const dirty = draft !== original;
 
   // JSON files get a format action; other formats (md/toml/yaml) have no
   // generic reformatter, so the button is hidden for them.
@@ -140,12 +118,12 @@ function FileBlock({
   const isMarkdown = file.format === 'markdown';
   const formatDraft = useCallback(() => {
     try {
-      setDraft(JSON.stringify(JSON.parse(draft), null, 2));
-      setError(null);
+      editor.setDraft(JSON.stringify(JSON.parse(editor.draft), null, 2));
+      editor.setError(null);
     } catch (err) {
-      setError(`Invalid JSON: ${String(err)}`);
+      editor.setError(`Invalid JSON: ${String(err)}`);
     }
-  }, [draft]);
+  }, [editor.draft, editor.setError, editor.setDraft]);
 
   return (
     // `text-[10px]` is the panel's base font size, and everything inside
@@ -154,129 +132,91 @@ function FileBlock({
     <div className="px-3 py-2 text-[10px]">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-[11px] font-medium">{file.label}</span>
-        <StatusBadge exists={file.exists} dirty={dirty} editing={editing} />
+        <StatusBadge exists={file.exists} dirty={editor.dirty} editing={editor.editing} />
 
-        <div className="ml-auto flex items-center gap-1">
-          {editing ? (
-            <>
-              {isJson && (
-                <button
-                  onClick={formatDraft}
-                  disabled={saving}
-                  title="Format JSON"
-                  className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
-                >
-                  format
-                </button>
-              )}
-              <button
-                onClick={() => void save()}
-                disabled={saving || !dirty}
-                title="Save"
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
-              >
-                {saving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
-                Save
-              </button>
-              <button
-                onClick={() => setDraft(original)}
-                disabled={saving || !dirty}
-                title="Revert changes"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-40"
-              >
-                <RotateCcw className="size-3" />
-              </button>
-              <button
-                onClick={cancel}
-                disabled={saving}
-                title="Cancel"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-40"
-              >
-                <X className="size-3" />
-              </button>
-            </>
-          ) : (
-            <>
-              {file.exists && file.content && file.content.length > 400 && (
-                <button
-                  onClick={() =>
-                    isMarkdown
-                      ? setPreviewing((v) => !v)
-                      : setExpanded((v) => !v)
-                  }
-                  className="inline-flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
-                >
-                  {isMarkdown ? (
-                    <>
-                      {previewing ? <FileText className="size-3" /> : <Eye className="size-3" />}
-                      {previewing ? 'Source' : 'Preview'}
-                    </>
-                  ) : showExpanded ? (
-                    'collapse'
-                  ) : (
-                    'expand'
-                  )}
-                </button>
-              )}
-              <button
-                onClick={startEdit}
-                title="Edit"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-              >
-                <Pencil className="size-3" />
-              </button>
-            </>
-          )}
-        </div>
+        <button
+          onClick={() => void openInEditor()}
+          title="Open in VS Code"
+          className="ml-auto text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
+        >
+          {file.path}
+        </button>
       </div>
 
-      <button
-        onClick={() => void openInEditor()}
-        title="Open in VS Code"
-        className="block w-full text-left text-[10px] text-blue-600 dark:text-blue-400 font-mono break-all mb-1 hover:underline"
-      >
-        {file.path}
-      </button>
-
-      {error && (
+      {editor.error != null && (
         <div className="mb-1 px-2 py-1 rounded text-[10px] bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 break-all">
-          {error}
+          {editor.error}
         </div>
       )}
 
-      {editing ? (
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          spellCheck={false}
-          className="w-full text-[10px] leading-relaxed font-mono bg-transparent border border-[hsl(var(--border))] rounded p-2 h-[70vh] min-h-64 resize-y focus:outline-none focus:ring-1 focus:ring-blue-400"
-        />
-      ) : file.exists ? (
-        isMarkdown && previewing ? (
-          // The panel's own `text-[10px]` drives the scale: MarkdownBody sizes
-          // its headings and code in `em`, and this panel has a smaller base
-          // than the rest of the app.
-          <MarkdownBody
-            source={original}
-            className={cn(
-              'leading-relaxed rounded bg-muted/30 p-2 overflow-auto',
-              showExpanded ? 'max-h-96' : 'max-h-24',
-            )}
-          />
-        ) : (
-          <pre
-            className={cn(
-              'text-[10px] leading-relaxed whitespace-pre-wrap break-all rounded bg-muted/30 p-2 overflow-auto',
-              showExpanded ? 'max-h-96' : 'max-h-24',
-            )}
-          >
-            {original || '(empty)'}
-          </pre>
-        )
-      ) : (
-        <div className="text-[10px] text-muted-foreground">
-          File does not exist. Click edit to create it.
+      {openError != null && (
+        <div className="mb-1 px-2 py-1 rounded text-[10px] bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 break-all">
+          {openError}
         </div>
+      )}
+
+      {isMarkdown ? (
+        /* A Markdown file is both previewable and editable, so it goes through
+           the shared pane — one place decides where Preview and Edit sit, and
+           the same buttons appear for a memory document. */
+        <MarkdownPane
+          source={original}
+          editor={editor}
+          editAction={
+            editor.editing && isJson ? { label: 'format', onClick: formatDraft } : null
+          }
+          // One row per file, so the default stays compact: the whole config
+          // list should be scannable, and asking for the render or the editor
+          // is what buys more room. The editor matches this panel's other
+          // formats, which use `h-[70vh]`.
+          heights={{
+            source: 'max-h-24',
+            preview: 'max-h-96',
+            editor: 'h-[70vh] min-h-64',
+          }}
+        />
+      ) : (
+        <>
+          <div className="flex items-center gap-1 mb-1">
+            {file.exists && original.length > 400 && (
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                {showExpanded ? 'collapse' : 'expand'}
+              </button>
+            )}
+            <button
+              onClick={editor.startEdit}
+              title="Edit"
+              className="ml-auto p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            >
+              <Pencil className="size-3" />
+            </button>
+          </div>
+
+          {editor.editing ? (
+            <textarea
+              value={editor.draft}
+              onChange={(e) => editor.setDraft(e.target.value)}
+              spellCheck={false}
+              className="w-full text-[10px] leading-relaxed font-mono bg-transparent border border-[hsl(var(--border))] rounded p-2 h-[70vh] min-h-64 resize-y focus:outline-none focus:ring-1 focus:ring-blue-400"
+            />
+          ) : file.exists ? (
+            <pre
+              className={cn(
+                'text-[10px] leading-relaxed whitespace-pre-wrap break-all rounded bg-muted/30 p-2 overflow-auto',
+                showExpanded ? 'max-h-96' : 'max-h-24',
+              )}
+            >
+              {original || '(empty)'}
+            </pre>
+          ) : (
+            <div className="text-[10px] text-muted-foreground">
+              File does not exist. Click edit to create it.
+            </div>
+          )}
+        </>
       )}
     </div>
   );

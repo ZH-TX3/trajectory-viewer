@@ -44,9 +44,7 @@ pub struct MemoryDoc {
 /// Returns an empty list when the project has no `memory/` directory, which is
 /// the common case — most projects never write one.
 pub fn load_memories(session_path: &Path) -> Vec<MemoryDoc> {
-    // The memory directory is a sibling of the session file, so its location
-    // does not depend on decoding the (lossy) project directory name.
-    let Some(dir) = session_path.parent().map(|p| p.join("memory")) else {
+    let Some(dir) = memory_dir(session_path) else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -94,6 +92,75 @@ pub fn load_memories(session_path: &Path) -> Vec<MemoryDoc> {
             .then(a.file_name.cmp(&b.file_name))
     });
     docs
+}
+
+/// Where the project's memory documents live, given any session file path.
+///
+/// The memory directory is a sibling of the session files, so this does not
+/// depend on decoding the (lossy) project directory name.
+fn memory_dir(session_path: &Path) -> Option<std::path::PathBuf> {
+    session_path.parent().map(|p| p.join("memory"))
+}
+
+/// Overwrite one memory document's Markdown body.
+///
+/// The frontmatter is preserved: these files carry the `name`/`description`/
+/// `type` the sidebar sorts and labels by, and rewriting the body through the
+/// app must not silently drop them.
+///
+/// The `session_path` decides which project is being edited and `file_name`
+/// picks the document inside it, so neither is trusted to name a file on its
+/// own: a `..`-laden or absolute `file_name` resolves against the memory
+/// directory rather than the filesystem root. The target must also already
+/// exist and be a regular file — this edits documents the agent wrote, and
+/// creating or replacing them with something that is not a document is the
+/// agent's job.
+pub fn save_memory(session_path: &Path, file_name: &str, content: &str) -> Result<(), String> {
+    let Some(dir) = memory_dir(session_path) else {
+        return Err("No memory directory for this project".to_string());
+    };
+    let target = dir.join(file_name);
+
+    // Resolve both sides with the filesystem rather than reasoning about `..`
+    // in strings: canonicalize collapses `../`, follows symlinks, and fails
+    // when the target does not exist — which is the answer we want here anyway,
+    // since this only edits documents the agent already wrote.
+    let (resolved_dir, resolved_target) = match (dir.canonicalize(), target.canonicalize()) {
+        (Ok(d), Ok(t)) => (d, t),
+        _ => return Err(format!("No such memory document: {file_name}")),
+    };
+    if !resolved_target.is_file() {
+        return Err(format!("No such memory document: {file_name}"));
+    }
+    // The resolved target must sit inside the resolved directory. This is what
+    // stops `../secret.md`: once canonicalized it no longer starts with the
+    // memory directory.
+    if !resolved_target.starts_with(&resolved_dir) {
+        return Err(format!("Not a memory document: {file_name}"));
+    }
+
+    let raw = std::fs::read_to_string(&resolved_target)
+        .map_err(|e| format!("Cannot read {}: {e}", resolved_target.display()))?;
+    let (front, _) = split_frontmatter(&raw);
+
+    // Rebuild the file rather than writing the body alone, so the frontmatter
+    // survives. A file without frontmatter is written as the new body.
+    let mut out = String::new();
+    if let Some(front) = front {
+        // Drop any leading whitespace the split left on the first key line.
+        let front = front.trim_start_matches(['\r', '\n']);
+        out.push_str(&format!("---\n{front}\n---\n"));
+        // A blank line before the body, the way these files are written.
+        out.push('\n');
+    }
+    out.push_str(content);
+
+    std::fs::write(&resolved_target, out).map_err(|e| {
+        format!(
+            "Cannot write {}: {e}",
+            resolved_target.display()
+        )
+    })
 }
 
 /// Split leading `---` frontmatter from the Markdown body.
@@ -261,5 +328,78 @@ description: real desc
         let dir = tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("proj")).unwrap();
         assert!(load_memories(&dir.path().join("proj/sess.jsonl")).is_empty());
+    }
+
+    #[test]
+    fn saving_a_document_preserves_its_frontmatter() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("proj/sess.jsonl");
+        std::fs::create_dir_all(dir.path().join("proj")).unwrap();
+        let memory = dir.path().join("proj/memory");
+        write(
+            &memory,
+            "fact.md",
+            "---\nname: my-fact\ndescription: one line\n---\n\nold body\n",
+        );
+
+        save_memory(&session, "fact.md", "new body\n").unwrap();
+
+        let after = std::fs::read_to_string(memory.join("fact.md")).unwrap();
+        assert!(after.contains("name: my-fact"), "frontmatter survives");
+        assert!(after.contains("new body"));
+        assert!(!after.contains("old body"));
+
+        // And it still reads back through the loader.
+        let docs = load_memories(&session);
+        assert_eq!(docs[0].content.trim(), "new body");
+        assert_eq!(docs[0].name.as_deref(), Some("my-fact"));
+    }
+
+    #[test]
+    fn a_document_without_frontmatter_is_rewritten_as_its_body() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("proj/sess.jsonl");
+        let memory = dir.path().join("proj/memory");
+        write(&memory, "plain.md", "# Old
+
+text
+");
+
+        save_memory(&session, "plain.md", "# New\n\ntext\n").unwrap();
+
+        let after = std::fs::read_to_string(memory.join("plain.md")).unwrap();
+        assert!(after.starts_with("# New"), "no frontmatter is invented: {after:?}");
+        assert!(!after.contains("# Old"));
+    }
+
+    #[test]
+    fn a_missing_document_is_refused() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("proj/sess.jsonl");
+        assert!(save_memory(&session, "nope.md", "x").is_err());
+    }
+
+    #[test]
+    fn a_path_outside_the_memory_directory_is_refused() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("proj/sess.jsonl");
+        write(&dir.path().join("proj"), "outside.md", "keep me");
+        // The memory directory has to exist, or the request fails earlier as
+        // "no such document" and the containment check is never reached.
+        write(&dir.path().join("proj/memory"), "real.md", "fine");
+
+        let err = save_memory(&session, "../outside.md", "clobbered").unwrap_err();
+        assert!(err.contains("Not a memory document"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("proj/outside.md")).unwrap(),
+            "keep me"
+        );
+    }
+
+    fn a_project_without_a_memory_directory_is_refused() {
+        let dir = tempdir().unwrap();
+        let session = dir.path().join("proj/sess.jsonl");
+        std::fs::create_dir_all(dir.path().join("proj")).unwrap();
+        assert!(save_memory(&session, "fact.md", "body").is_err());
     }
 }

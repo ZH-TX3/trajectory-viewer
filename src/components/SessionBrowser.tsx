@@ -973,11 +973,20 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
 
       {/* Right panel */}
       <main className="flex-1 flex flex-col min-w-0">
-        {/* A memory document takes over the panel while it is open. */}
+        {/* A memory document takes over the panel while it is open. The key
+            identifies the document, not its position in the tree, so switching
+            files remounts the viewer and never leaves the previous document's
+            edit state behind. */}
         {openMemory !== null ? (
           <MemoryViewer
+            key={`${openMemory.projectPath}/${openMemory.doc.fileName}`}
             memory={openMemory}
             fromSessionId={selectedSession?.sessionId ?? null}
+            onSaved={(content) =>
+              setOpenMemory((prev) =>
+                prev === null ? prev : { ...prev, doc: { ...prev.doc, content } },
+              )
+            }
           />
         ) : !selectedSession ? (
           <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">

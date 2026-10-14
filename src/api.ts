@@ -161,6 +161,15 @@ export const api = {
     return await invoke('get_project_memories', { sourcePath });
   },
 
+  /** Overwrite one memory document's body. Frontmatter is kept server-side. */
+  async saveProjectMemory(
+    sourcePath: string,
+    fileName: string,
+    content: string,
+  ): Promise<void> {
+    return await invoke('save_project_memory', { sourcePath, fileName, content });
+  },
+
   /** Whether a provider's configured resume command can actually be started. */
   async resumeCommandAvailable(providerId: string): Promise<boolean> {
     return await invoke('resume_command_available', { providerId });

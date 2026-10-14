@@ -63,6 +63,24 @@ pub fn get_project_memories(source_path: String) -> Vec<session_manager::memory:
     session_manager::memory::load_memories(std::path::Path::new(&source_path))
 }
 
+/// Overwrite one project memory document's body.
+///
+/// `source_path` is any session file of the project; `file_name` is the bare
+/// document name, which the backend resolves inside the project's `memory/`
+/// directory rather than trusting it as a path.
+#[tauri::command]
+pub fn save_project_memory(
+    source_path: String,
+    file_name: String,
+    content: String,
+) -> Result<(), String> {
+    session_manager::memory::save_memory(
+        std::path::Path::new(&source_path),
+        &file_name,
+        &content,
+    )
+}
+
 #[tauri::command]
 pub fn get_session_messages(
     provider_id: String,

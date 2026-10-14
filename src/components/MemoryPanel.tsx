@@ -6,7 +6,7 @@
 //   ~/.claude/projects/{project}/memory/{name}.md
 //
 // In the sidebar this mirrors that layout — the project group gains a
-// `memory/` node listing the documents, above its sessions. Clicking one opens
+// `memory` node listing the documents, above its sessions. Clicking one opens
 // it in the right panel, the same way clicking a session opens its messages.
 //
 // The node is rendered only when the directory exists: most projects never
@@ -18,6 +18,7 @@ import { api } from '../api';
 import { cn } from '../lib/utils';
 import type { MemoryDoc } from '../types';
 import { MarkdownPane } from './MarkdownPane';
+import { useMarkdownEditor } from '../utils/useMarkdownEditor';
 
 /** Colour per frontmatter `type`, matching the app's existing palette. */
 const KIND_STYLES: Record<string, string> = {
@@ -31,10 +32,16 @@ export interface OpenMemory {
   doc: MemoryDoc;
   /** The project's display path, for the viewer header. */
   projectPath: string;
+  /**
+   * Any session file of the project. The memory directory is a sibling of the
+   * session files, so this is what the backend needs to find it again when the
+   * document is saved.
+   */
+  sourcePath: string;
 }
 
 /**
- * The `memory/` node for one project group, in the sidebar.
+ * The `memory` node for one project group, in the sidebar.
  *
  * A document's name is bold — the file name is in `text-muted-foreground`
  * below it, and without the weight the two lines read as one run-on row.
@@ -76,7 +83,7 @@ export function MemoryTree({
 
   return (
     <div>
-      {/* The memory/ directory row */}
+      {/* The memory directory row */}
       <div
         onClick={() => setOpen((v) => !v)}
         className="group flex items-center gap-1.5 pl-5 pr-2 py-1 cursor-pointer hover:bg-muted/50 transition-colors"
@@ -87,7 +94,7 @@ export function MemoryTree({
           <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
         )}
         <FolderOpen className="size-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
-        <span className="text-[11px] font-medium truncate">memory/</span>
+        <span className="text-[11px] font-medium truncate">memory</span>
         <span className="text-[10px] opacity-60 ml-auto">{docs.length}</span>
       </div>
 
@@ -96,7 +103,7 @@ export function MemoryTree({
         return (
           <div
             key={doc.fileName}
-            onClick={() => onOpen({ doc, projectPath })}
+            onClick={() => onOpen({ doc, projectPath, sourcePath })}
             title={doc.description ?? doc.fileName}
             className={cn(
               'flex items-start gap-1.5 pl-9 pr-2 py-1 cursor-pointer transition-colors',
@@ -145,18 +152,37 @@ export function MemoryTree({
  * The body is the file's exact text behind a Source / Preview switch (see
  * `MarkdownPane`) — the raw Markdown is what the file actually stores, so it
  * is the default view and rendering is opt-in.
+ *
+ * Editing writes straight through: these are the agent's working notes, and a
+ * save that asked first would interrupt whoever is updating them. Only the
+ * body is sent — the frontmatter the sidebar sorts and labels by is the
+ * backend's business.
  */
-
 export function MemoryViewer({
   memory,
   fromSessionId,
+  onSaved,
 }: {
   memory: OpenMemory;
   fromSessionId?: string | null;
+  /** Called after a successful save, with the body that was written. */
+  onSaved?: (content: string) => void;
 }) {
-  const { doc, projectPath } = memory;
+  const { doc, projectPath, sourcePath } = memory;
   const fromThisSession =
     fromSessionId != null && doc.originSessionId != null && doc.originSessionId === fromSessionId;
+
+  // The document's own content is the source of truth. Keeping a copy in state
+  // would go stale when the reader switches documents — the pane is remounted
+  // per document for exactly that reason (see SessionBrowser's `key`), so the
+  // copy would only ever hold the first one.
+  const editor = useMarkdownEditor({
+    original: doc.content,
+    save: (content) => api.saveProjectMemory(sourcePath, doc.fileName, content),
+    // The backend returns nothing, so hand back what was written for the
+    // caller to adopt rather than reloading to find out.
+    onSaved: onSaved,
+  });
 
   return (
     <>
@@ -194,10 +220,19 @@ export function MemoryViewer({
         </div>
       )}
 
+      {editor.error != null && (
+        <div className="mx-4 mb-1 px-2 py-1 rounded text-[10px] bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 break-all shrink-0">
+          {editor.error}
+        </div>
+      )}
+
       <MarkdownPane
         className="flex-1 px-4 py-3"
         source={doc.content}
-        label={doc.fileName}
+        editor={editor}
+        // The panel's height is set by the app shell, so every view fills it —
+        // one entry, and preview and editing inherit it.
+        heights={{ source: 'flex-1' }}
       />
     </>
   );

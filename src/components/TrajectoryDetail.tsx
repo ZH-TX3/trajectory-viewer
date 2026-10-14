@@ -20,6 +20,8 @@ import {
 } from '../utils/format';
 import { cn } from '../lib/utils';
 import { MarkdownBody } from './MarkdownBody';
+import { SemanticToolResult } from './SemanticToolResult';
+import { describeToolResult } from '../utils/toolResult';
 import { X, ChevronRight } from 'lucide-react';
 
 interface TrajectoryDetailProps {
@@ -75,7 +77,7 @@ function detailTabs(
     return [
       { id: 'overview', label: 'Summary' },
       ...(hasPreview(cell) ? [{ id: 'rendered', label: 'Preview' } as TabDef] : []),
-      ...(isTool && (cell.result ?? cell.outputDetail)
+      ...(isTool && hasResult(cell)
         ? [{ id: 'result', label: 'Result' } as TabDef]
         : []),
       ...(isTool && cell.schemaDetail !== undefined
@@ -108,7 +110,7 @@ function detailTabs(
       return [
         { id: 'overview', label: 'Summary' },
         ...(hasPreview(cell) ? [{ id: 'rendered', label: 'Preview' } as TabDef] : []),
-        ...(cell.result ?? cell.outputDetail
+        ...(hasResult(cell)
           ? [{ id: 'result', label: 'Result' } as TabDef]
           : []),
         ...(cell.schemaDetail !== undefined
@@ -125,6 +127,15 @@ function stateLabel(state: 'complete' | 'error'): string {
 
 function isToolRecord(cell: TrajectoryCellProps): boolean {
   return cell.kind === 'tool' || cell.kind === 'subtool';
+}
+
+/**
+ * Whether the Result tab has anything to show. An empty result is still a
+ * result — a shell call that printed nothing should still show its command.
+ */
+function hasResult(cell: TrajectoryCellProps): boolean {
+  if (cell.result != null || cell.outputDetail != null) return true;
+  return describeToolResult(cell) !== null;
 }
 
 function OverviewSection({
@@ -471,11 +482,7 @@ export function TrajectoryDetail({ cell, request, onClose, detailWidth, onWidthC
             {safeJsonFormat(cell.outputDetail ?? cell.inputDetail ?? cell.text)}
           </pre>
         )}
-        {active === 'result' && (
-          <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all leading-relaxed">
-            {safeJsonFormat(cell.result ?? cell.resultPreviewMarkdown ?? cell.outputDetail ?? '(no result)')}
-          </pre>
-        )}
+        {active === 'result' && <ToolResultTab cell={cell} />}
         {active === 'schema' && (
           <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all leading-relaxed">
             {safeJsonFormat(cell.schemaDetail ?? '(no schema)')}
@@ -488,6 +495,23 @@ export function TrajectoryDetail({ cell, request, onClose, detailWidth, onWidthC
 
 function TimingTab({ cell }: { cell: TrajectoryCellProps }) {
   return <TimingPanel cell={cell} />;
+}
+
+/**
+ * The Result tab. A tool whose arguments and output have a known shape renders
+ * as that shape — an edit as a diff, a shell call as a terminal block — and
+ * anything else keeps the generic formatted-JSON view.
+ */
+function ToolResultTab({ cell }: { cell: TrajectoryCellProps }) {
+  const view = describeToolResult(cell);
+  if (view !== null) {
+    return <SemanticToolResult view={view} isError={cell.isError === true} />;
+  }
+  return (
+    <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all leading-relaxed">
+      {safeJsonFormat(cell.result ?? cell.resultPreviewMarkdown ?? cell.outputDetail ?? '(no result)')}
+    </pre>
+  );
 }
 
 /** A collapsible "Thinking" sub-block shown inside the preview, above the body.

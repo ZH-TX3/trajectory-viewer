@@ -50,6 +50,7 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
         let line_type = json["type"].as_str().unwrap_or("unknown").to_string();
 
         let ts = parse_timestamp_to_ms(&json["timestamp"]).unwrap_or(0);
+        let (uuid, parent_uuid) = record_ids(&json);
 
         // Extract session UUID from the first line that has it
         if session_id.is_empty() {
@@ -141,6 +142,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("claude".to_string()),
+                    uuid: uuid.clone(),
+                    parent_uuid: parent_uuid.clone(),
                 });
             }
 
@@ -202,6 +205,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("claude".to_string()),
+                    uuid: uuid.clone(),
+                    parent_uuid: parent_uuid.clone(),
                 });
             }
 
@@ -232,6 +237,18 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
     Ok((session_id, events))
 }
 
+/// A line's own id and the id it hangs off.
+///
+/// Every conversation record carries both, and the pair is what reconstructs
+/// the graph — the only way to tell the branch that ran from one a rewind
+/// abandoned.
+fn record_ids(json: &Value) -> (Option<String>, Option<String>) {
+    (
+        json["uuid"].as_str().map(|s| s.to_string()),
+        json["parentUuid"].as_str().map(|s| s.to_string()),
+    )
+}
+
 /// Turn a `system` line into a trajectory event, when it is one that belongs on
 /// the timeline.
 ///
@@ -247,6 +264,7 @@ fn push_system_event(
     json: &Value,
     current_turn: usize,
 ) {
+    let (uuid, parent_uuid) = record_ids(json);
     let (event_type, content, is_error) = match json["subtype"].as_str() {
         Some("compact_boundary") => (
             "compaction",
@@ -281,6 +299,8 @@ fn push_system_event(
         cache_write_tokens: None,
         model: None,
         provider: Some("claude".to_string()),
+        uuid: uuid.clone(),
+        parent_uuid: parent_uuid.clone(),
     });
 }
 
@@ -333,6 +353,7 @@ fn push_user_events(
     if json["isCompactSummary"].as_bool() == Some(true) {
         return;
     }
+    let (uuid, parent_uuid) = record_ids(json);
     let mut user_texts: Vec<String> = Vec::new();
     let mut tool_results: Vec<(Option<String>, String, Option<bool>)> = Vec::new();
 
@@ -424,6 +445,8 @@ fn push_user_events(
             cache_write_tokens: None,
             model: None,
             provider: Some("claude".to_string()),
+            uuid: uuid.clone(),
+            parent_uuid: parent_uuid.clone(),
         });
     }
 
@@ -453,6 +476,8 @@ fn push_user_events(
             cache_write_tokens: json["usage"]["cache_creation_input_tokens"].as_i64(),
             model: json["model"].as_str().map(|s| s.to_string()),
             provider: Some("claude".to_string()),
+            uuid: uuid.clone(),
+            parent_uuid: parent_uuid.clone(),
         });
     }
 }
@@ -475,6 +500,7 @@ fn push_assistant_events(
     // collapsed into a single "Step 1" group and the numbering said nothing.
     let step = *current_step + 1;
     let usage = Usage::read(message, json);
+    let (uuid, parent_uuid) = record_ids(json);
     let mut text_parts: Vec<String> = Vec::new();
     let mut thinking_parts: Vec<String> = Vec::new();
     let mut saw_tool_use = false;
@@ -535,6 +561,8 @@ fn push_assistant_events(
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("claude".to_string()),
+                    uuid: uuid.clone(),
+                    parent_uuid: parent_uuid.clone(),
                 });
             } else if item_type == "thinking" || item_type == "reasoning" {
                 // Reasoning text lives under `thinking` (or `reasoning`), not
@@ -598,6 +626,8 @@ fn push_assistant_events(
             cache_write_tokens: usage.cache_write,
             model,
             provider: Some("claude".to_string()),
+            uuid: uuid.clone(),
+            parent_uuid: parent_uuid.clone(),
         });
     } else if let Some(index) = first_tool_call {
         // A record that only calls tools is still a paid request. Emitting

@@ -166,6 +166,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("dsh".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
             }
 
@@ -276,6 +278,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens,
                     model,
                     provider: Some("dsh".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
                 chunk_states.remove(&(turn_key, current_step));
             }
@@ -347,6 +351,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("dsh".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
             }
 
@@ -444,6 +450,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("dsh".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
             }
 

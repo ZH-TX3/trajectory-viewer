@@ -51,6 +51,8 @@ function event(overrides: Partial<TrajectoryEvent> = {}): TrajectoryEvent {
     cacheWriteTokens: null,
     model: null,
     provider: 'claude',
+    uuid: null,
+    parentUuid: null,
     ...overrides,
   };
 }

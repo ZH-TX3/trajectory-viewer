@@ -473,6 +473,8 @@ fn push_user_events(
             cache_write_tokens: None,
             model: None,
             provider: Some("opencode".to_string()),
+            uuid: None,
+            parent_uuid: None,
         });
     }
 
@@ -514,6 +516,8 @@ fn push_user_events(
             cache_write_tokens: msg.cache_write_tokens,
             model: msg.model.clone(),
             provider: Some("opencode".to_string()),
+            uuid: None,
+            parent_uuid: None,
         });
     }
 }
@@ -594,6 +598,8 @@ fn push_assistant_events(
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("opencode".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
 
                 // Tool-result event (response, at state end).
@@ -629,6 +635,8 @@ fn push_assistant_events(
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("opencode".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
             }
             _ => {
@@ -680,6 +688,8 @@ fn push_assistant_events(
             cache_write_tokens: msg.cache_write_tokens,
             model: msg.model.clone(),
             provider: msg.provider.clone(),
+            uuid: None,
+            parent_uuid: None,
         });
     }
 }

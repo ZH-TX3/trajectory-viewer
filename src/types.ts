@@ -94,6 +94,9 @@ export interface TrajectoryEvent {
   cacheWriteTokens: number | null;
   model: string | null;
   provider: string | null;
+  /** The record's id and the id it hangs off, as the provider wrote them. */
+  uuid: string | null;
+  parentUuid: string | null;
 }
 
 export interface ContentBlock {

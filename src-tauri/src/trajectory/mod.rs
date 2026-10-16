@@ -61,6 +61,11 @@ pub struct TrajectoryEvent {
     pub cache_write_tokens: Option<i64>,
     pub model: Option<String>,
     pub provider: Option<String>,
+    /// The record's own id, and the id it hangs off, exactly as the provider
+    /// wrote them. Together they reconstruct the conversation graph, which is
+    /// how a branch abandoned by a rewind is told from the branch that ran.
+    pub uuid: Option<String>,
+    pub parent_uuid: Option<String>,
 }
 
 /// A single content block within a message.

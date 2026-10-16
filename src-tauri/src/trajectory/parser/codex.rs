@@ -136,6 +136,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens: None,
                     model,
                     provider: Some("codex".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
             }
 
@@ -185,6 +187,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("codex".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
             }
 
@@ -231,6 +235,8 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                     cache_write_tokens: None,
                     model: None,
                     provider: Some("codex".to_string()),
+                    uuid: None,
+                    parent_uuid: None,
                 });
             }
 

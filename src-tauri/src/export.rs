@@ -159,6 +159,8 @@ mod tests {
             cache_write_tokens: None,
             model: None,
             provider: Some("claude".to_string()),
+            uuid: None,
+            parent_uuid: None,
         }
     }
 

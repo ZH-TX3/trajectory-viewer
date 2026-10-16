@@ -205,6 +205,10 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
                 });
             }
 
+            "system" => {
+                push_system_event(&mut events, &mut seq, ts, &json, current_turn);
+            }
+
             "custom-title" | "title" => {
                 // Title lines don't produce trajectory events
             }
@@ -228,6 +232,52 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
     Ok((session_id, events))
 }
 
+/// Turn a `system` line into a trajectory event, when it is one that belongs on
+/// the timeline.
+///
+/// Only `compact_boundary` qualifies today: it is the moment the context was
+/// thrown away, and it carries the metadata describing what was dropped. The
+/// other subtypes of a real log - `turn_duration`, `api_error`, `away_summary`,
+/// `local_command`, `informational`, `stop_hook_summary` - have no event shape
+/// yet, so they stay dropped rather than becoming noise.
+fn push_system_event(
+    events: &mut Vec<TrajectoryEvent>,
+    seq: &mut usize,
+    ts: i64,
+    json: &Value,
+    current_turn: usize,
+) {
+    if json["subtype"].as_str() != Some("compact_boundary") {
+        return;
+    }
+
+    *seq += 1;
+    events.push(TrajectoryEvent {
+        seq: *seq,
+        ts,
+        event_type: "compaction".to_string(),
+        role: Some("system".to_string()),
+        content: json["content"].as_str().map(|s| s.to_string()),
+        content_blocks: None,
+        tool_call_id: None,
+        tool_name: None,
+        tool_args: None,
+        tool_result: None,
+        is_error: None,
+        turn: Some(current_turn),
+        step: None,
+        duration_ms: None,
+        ttft_ms: None,
+        input_tokens: None,
+        output_tokens: None,
+        reasoning_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        model: None,
+        provider: Some("claude".to_string()),
+    });
+}
+
 /// Split a Claude `user` line into `tool-result` events (one per tool_result
 /// block) and a single `user-message` event for any text content.
 fn push_user_events(
@@ -240,6 +290,13 @@ fn push_user_events(
     current_step: &mut usize,
 ) {
     let message = &json["message"];
+    // The context left over from a compaction is replayed as a `user` line
+    // carrying `isCompactSummary`. It is not user input: emitting it opened a
+    // phantom turn and rendered the whole restored context as something the
+    // user never said. The `compact_boundary` system line marks it instead.
+    if json["isCompactSummary"].as_bool() == Some(true) {
+        return;
+    }
     let mut user_texts: Vec<String> = Vec::new();
     let mut tool_results: Vec<(Option<String>, String, Option<bool>)> = Vec::new();
 
@@ -321,7 +378,7 @@ fn push_user_events(
             tool_result: Some(result),
             is_error,
             turn: Some(*current_turn),
-            step: Some(1),
+            step: Some(*current_step),
             duration_ms: None,
             ttft_ms: None,
             input_tokens: None,
@@ -376,7 +433,11 @@ fn push_assistant_events(
     current_step: &mut usize,
 ) {
     let message = &json["message"];
-    let assistant_step = *current_step;
+    // Each assistant record is the next step of its turn: a turn is one user
+    // message followed by as many request/response round-trips as it took.
+    // Every record used to be pinned to step 1, so a turn of ~19 records
+    // collapsed into a single "Step 1" group and the numbering said nothing.
+    let step = *current_step + 1;
     let usage = Usage::read(message, json);
     let mut text_parts: Vec<String> = Vec::new();
     let mut thinking_parts: Vec<String> = Vec::new();
@@ -389,9 +450,6 @@ fn push_assistant_events(
             let item_type = item["type"].as_str().unwrap_or("");
             if item_type == "tool_use" {
                 saw_tool_use = true;
-                if *current_turn > 0 {
-                    *current_step = 1;
-                }
 
                 *seq += 1;
                 let call_id = item["id"]
@@ -431,7 +489,7 @@ fn push_assistant_events(
                     tool_result: None,
                     is_error: None,
                     turn: Some(*current_turn),
-                    step: Some(*current_step),
+                    step: Some(step),
                     duration_ms: None,
                     ttft_ms: None,
                     input_tokens: None,
@@ -494,7 +552,7 @@ fn push_assistant_events(
             tool_result: None,
             is_error: None,
             turn: Some(*current_turn),
-            step: Some(if saw_tool_use { 1 } else { assistant_step }),
+            step: Some(step),
             duration_ms: None,
             ttft_ms: None,
             input_tokens: usage.input,
@@ -516,6 +574,12 @@ fn push_assistant_events(
         event.reasoning_tokens = usage.reasoning;
         event.cache_read_tokens = usage.cache_read;
         event.cache_write_tokens = usage.cache_write;
+    }
+
+    // Only a record that produced something advances the turn's step, so a
+    // stray empty record cannot leave a hole in the numbering.
+    if saw_tool_use || !text_parts.is_empty() || !thinking_parts.is_empty() {
+        *current_step = step;
     }
 }
 
@@ -881,6 +945,142 @@ mod tests {
         assert_eq!(call.cache_write_tokens, Some(12345));
         // Nothing is invented: the record still yields no message row.
         assert_eq!(events.len(), 2);
+    }
+
+    // A turn is one user message plus every request/response round-trip it
+    // took. Every assistant record used to be pinned to step 1, so a long turn
+    // rendered as a single "Step 1" group and the numbering meant nothing.
+    #[test]
+    fn parse_numbers_the_steps_of_a_turn() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-step\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"go\"},\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"ok\"}]},\"timestamp\":\"2026-03-06T10:03:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":\"Bash\",\"input\":{\"command\":\"pwd\"}}]},\"timestamp\":\"2026-03-06T10:04:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"done\"},\"timestamp\":\"2026-03-06T10:05:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        let step_of = |wanted: &str| {
+            events
+                .iter()
+                .find(|e| e.tool_call_id.as_deref() == Some(wanted))
+                .unwrap_or_else(|| panic!("no event for {wanted}"))
+                .step
+        };
+
+        assert_eq!(events[0].step, Some(0), "the user message opens the turn");
+        assert_eq!(step_of("t1"), Some(1));
+        assert_eq!(step_of("t2"), Some(2));
+        let last = events.last().unwrap();
+        assert_eq!(last.content.as_deref(), Some("done"));
+        assert_eq!(last.step, Some(3));
+        assert!(events.iter().all(|e| e.turn == Some(1)), "still one turn");
+    }
+
+    // The tool result answers the step whose call produced it, not a fixed 1.
+    #[test]
+    fn parse_keeps_a_tool_result_in_its_calls_step() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-step2\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"go\"},\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"a\",\"name\":\"Read\",\"input\":{\"file_path\":\"/x\"}}]},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"a\",\"content\":\"1\"}]},\"timestamp\":\"2026-03-06T10:03:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"b\",\"name\":\"Read\",\"input\":{\"file_path\":\"/y\"}}]},\"timestamp\":\"2026-03-06T10:04:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"b\",\"content\":\"2\"}]},\"timestamp\":\"2026-03-06T10:05:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        let result_step = |wanted: &str| {
+            events
+                .iter()
+                .find(|e| {
+                    e.event_type == "tool-result" && e.tool_call_id.as_deref() == Some(wanted)
+                })
+                .unwrap_or_else(|| panic!("no result for {wanted}"))
+                .step
+        };
+        assert_eq!(result_step("a"), Some(1));
+        assert_eq!(result_step("b"), Some(2));
+    }
+
+    // A compaction is the moment the context was thrown away. The frontend has
+    // rendered a `compaction` record all along; the parser never emitted one.
+    #[test]
+    fn parse_marks_a_compaction_and_ignores_other_system_lines() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-c\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"go\"},\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"durationMs\":443308,\"messageCount\":141,\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+                "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"content\":\"Context compacted\",\"compactMetadata\":{\"trigger\":\"manual\",\"preTokens\":763},\"timestamp\":\"2026-03-06T10:03:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"after\"},\"timestamp\":\"2026-03-06T10:04:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        let compactions: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == "compaction")
+            .collect();
+        assert_eq!(
+            compactions.len(),
+            1,
+            "one compaction, no other system lines"
+        );
+        assert_eq!(compactions[0].content.as_deref(), Some("Context compacted"));
+        assert_eq!(compactions[0].turn, Some(1));
+        // Nothing else was invented from the turn_duration line.
+        assert_eq!(events.len(), 3);
+    }
+
+    // The context restored by a compaction is replayed as a `user` line. Taking
+    // it for user input opened a phantom turn and showed the restored context
+    // as something the user had said.
+    #[test]
+    fn parse_does_not_mistake_replayed_context_for_user_input() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-cc\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"go\"},\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"user\",\"isCompactSummary\":true,\"message\":{\"role\":\"user\",\"content\":\"This session is being continued from a previous conversation\"},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"still the same turn\"},\"timestamp\":\"2026-03-06T10:03:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        assert_eq!(events.len(), 2, "the replayed context yields no record");
+        assert!(
+            !events.iter().any(|e| e
+                .content
+                .as_deref()
+                .unwrap_or("")
+                .contains("being continued")),
+            "the restored context must not surface as a user message"
+        );
+        assert_eq!(events[1].turn, Some(1), "no phantom turn was opened");
+        assert_eq!(events[1].step, Some(1));
     }
 
     #[test]

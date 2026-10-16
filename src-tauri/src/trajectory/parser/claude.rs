@@ -235,11 +235,11 @@ pub fn parse_trajectory(path: &Path) -> Result<(String, Vec<TrajectoryEvent>), S
 /// Turn a `system` line into a trajectory event, when it is one that belongs on
 /// the timeline.
 ///
-/// Only `compact_boundary` qualifies today: it is the moment the context was
-/// thrown away, and it carries the metadata describing what was dropped. The
-/// other subtypes of a real log - `turn_duration`, `api_error`, `away_summary`,
-/// `local_command`, `informational`, `stop_hook_summary` - have no event shape
-/// yet, so they stay dropped rather than becoming noise.
+/// Only two subtypes qualify today: `compact_boundary`, the moment the context
+/// was thrown away, and `api_error`, an upstream failure the CLI retried. The
+/// rest - `turn_duration`, `away_summary`, `local_command`, `informational`,
+/// `stop_hook_summary` - have no event shape yet and stay dropped rather than
+/// becoming noise.
 fn push_system_event(
     events: &mut Vec<TrajectoryEvent>,
     seq: &mut usize,
@@ -247,23 +247,29 @@ fn push_system_event(
     json: &Value,
     current_turn: usize,
 ) {
-    if json["subtype"].as_str() != Some("compact_boundary") {
-        return;
-    }
+    let (event_type, content, is_error) = match json["subtype"].as_str() {
+        Some("compact_boundary") => (
+            "compaction",
+            json["content"].as_str().map(|s| s.to_string()),
+            None,
+        ),
+        Some("api_error") => ("api-error", Some(describe_api_error(json)), Some(true)),
+        _ => return,
+    };
 
     *seq += 1;
     events.push(TrajectoryEvent {
         seq: *seq,
         ts,
-        event_type: "compaction".to_string(),
+        event_type: event_type.to_string(),
         role: Some("system".to_string()),
-        content: json["content"].as_str().map(|s| s.to_string()),
+        content,
         content_blocks: None,
         tool_call_id: None,
         tool_name: None,
         tool_args: None,
         tool_result: None,
-        is_error: None,
+        is_error,
         turn: Some(current_turn),
         step: None,
         duration_ms: None,
@@ -276,6 +282,36 @@ fn push_system_event(
         model: None,
         provider: Some("claude".to_string()),
     });
+}
+
+/// One line describing an `api_error`.
+///
+/// The payload buries the message a few levels down (`error.error.error`) and
+/// carries the HTTP status the CLI saw; both matter when reading a session
+/// back. A session can hold dozens of these while still finishing, so they are
+/// reported as events rather than failures.
+fn describe_api_error(json: &Value) -> String {
+    let mut out = String::new();
+    if let Some(status) = json["error"]["status"].as_i64() {
+        out.push_str(&format!("HTTP {status} "));
+    }
+    if let Some(kind) = json["error"]["error"]["error"]["type"].as_str() {
+        out.push_str(kind);
+        out.push_str(": ");
+    }
+    match json["error"]["error"]["error"]["message"]
+        .as_str()
+        .or_else(|| json["error"]["message"].as_str())
+    {
+        Some(message) => out.push_str(message),
+        // An unknown shape: show the raw error rather than an empty record.
+        None => out.push_str(&json["error"].to_string()),
+    }
+    if let (Some(attempt), Some(max)) = (json["retryAttempt"].as_i64(), json["maxRetries"].as_i64())
+    {
+        out.push_str(&format!(" (retry {attempt}/{max})"));
+    }
+    out
 }
 
 /// Split a Claude `user` line into `tool-result` events (one per tool_result
@@ -1049,6 +1085,59 @@ mod tests {
         assert_eq!(compactions[0].turn, Some(1));
         // Nothing else was invented from the turn_duration line.
         assert_eq!(events.len(), 3);
+    }
+
+    // A session can log dozens of upstream failures while still finishing. All
+    // of them were invisible before; the status and the retry count are what
+    // make the line worth reading.
+    #[test]
+    fn parse_reports_an_api_error_with_its_status_and_retry() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-err\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"go\"},\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"system\",\"subtype\":\"api_error\",\"error\":{\"status\":502,\"error\":{\"error\":{\"message\":\"upstream refused\",\"type\":\"proxy_error\"}}},\"retryAttempt\":1,\"maxRetries\":10,\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+                "{\"type\":\"system\",\"subtype\":\"away_summary\",\"content\":\"idle\",\"timestamp\":\"2026-03-06T10:03:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        let errors: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == "api-error")
+            .collect();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].is_error, Some(true));
+        assert_eq!(
+            errors[0].content.as_deref(),
+            Some("HTTP 502 proxy_error: upstream refused (retry 1/10)")
+        );
+        assert_eq!(errors[0].turn, Some(1));
+        assert_eq!(events.len(), 2, "away_summary stays dropped");
+    }
+
+    // An `api_error` shape this build does not know still yields the raw
+    // payload rather than an empty record.
+    #[test]
+    fn parse_falls_back_to_the_raw_api_error_payload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"sess-err2\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"system\",\"subtype\":\"api_error\",\"error\":{\"weird\":true},\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let (_, events) = parse_trajectory(&path).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].content.as_deref(), Some("{\"weird\":true}"));
     }
 
     // The context restored by a compaction is replayed as a `user` line. Taking

@@ -68,7 +68,8 @@ export type TrajectoryEventType =
   | 'tool-call'
   | 'tool-result'
   | 'turn-boundary'
-  | 'compaction';
+  | 'compaction'
+  | 'api-error';
 
 export interface TrajectoryEvent {
   seq: number;

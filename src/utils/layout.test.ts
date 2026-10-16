@@ -124,6 +124,30 @@ describe('deriveTrajectoryLayout', () => {
   it('returns no turns for an empty event list', () => {
     expect(deriveTrajectoryLayout([])).toEqual([]);
   });
+
+  // An upstream failure the CLI retried reads as a system record that went
+  // wrong, not as a tool that did.
+  it('renders an api error as an error system record', () => {
+    const turns = deriveTrajectoryLayout([
+      event({ seq: 1, eventType: 'user-message', turn: 1, step: 0 }),
+      event({
+        seq: 2,
+        eventType: 'api-error',
+        role: 'system',
+        content: 'HTTP 502 proxy_error: upstream refused (retry 1/10)',
+        turn: 1,
+        step: null,
+        isError: true,
+      }),
+    ]);
+
+    const cells = turns.flatMap((t) => t.groups.flatMap((g) => g.cells));
+    const cell = cells.find((c) => c.kind === 'system');
+    expect(cell).toBeDefined();
+    expect(cell!.isError).toBe(true);
+    expect(cell!.text).toContain('HTTP 502');
+    expect(cell!.sourceSeq).toBe(2);
+  });
 });
 
 describe('deriveTrajectoryTimeline', () => {

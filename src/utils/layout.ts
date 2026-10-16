@@ -454,6 +454,22 @@ function eventToCell(
         outputDetail: event.content,
       } as TrajectoryCellProps;
 
+    // An upstream failure the CLI retried. Rendered as a system record so it
+    // reads as turbulence rather than as a tool that went wrong.
+    case 'api-error':
+      return {
+        index,
+        sourceSeq: event.seq,
+        timeSeconds,
+        startedAt: event.ts,
+        isError: true,
+        inputDetail: event.content,
+        outputDetail: event.content,
+        kind: 'system',
+        text: truncateContent(event.content, 120),
+        previewMarkdown: event.content,
+      } as TrajectoryCellProps;
+
     default:
       return null;
   }

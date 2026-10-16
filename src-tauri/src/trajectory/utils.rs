@@ -92,11 +92,15 @@ impl ParseWarnings {
     }
 }
 
-/// Estimate per-event duration from the following event timestamp and
-/// approximate TTFT for assistant messages.
+/// Estimate per-event duration from the following event timestamp.
 ///
-/// Providers that already record precise values (e.g. DSH from streaming
-/// chunk timestamps) keep them; only events without a value get the estimate.
+/// Providers that already record precise values (e.g. DSH from streaming chunk
+/// timestamps) keep them; only events without a value get the estimate.
+///
+/// Nothing is invented beyond that. An earlier version also filled in a
+/// synthetic TTFT of `duration / 3` (capped at 3s) for assistant messages,
+/// which the UI then reported as recorded timing — a number that looked
+/// measured and was not. A provider either reports TTFT or it has none.
 pub fn finalize_trajectory_timings(events: &mut [crate::trajectory::TrajectoryEvent]) {
     for i in 0..events.len() {
         let ts = events[i].ts;
@@ -105,13 +109,6 @@ pub fn finalize_trajectory_timings(events: &mut [crate::trajectory::TrajectoryEv
             let next_ts = events.get(i + 1).map(|event| event.ts).unwrap_or(ts);
             if next_ts > ts {
                 events[i].duration_ms = Some(next_ts - ts);
-            }
-        }
-
-        if events[i].event_type == "assistant-message" && events[i].ttft_ms.is_none() {
-            if let Some(duration_ms) = events[i].duration_ms {
-                // Rough estimate: TTFT ≈ one-third of total duration, capped at 3s
-                events[i].ttft_ms = Some((duration_ms / 3).min(3000));
             }
         }
     }

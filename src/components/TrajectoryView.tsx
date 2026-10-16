@@ -153,6 +153,9 @@ function TrajectoryBody({ data, focusTs, sourcePath, onOpenSubagent }: Trajector
   const [collapsedTurns, setCollapsedTurns] = useState<Set<number>>(new Set());
   const [collapsedAssistants, setCollapsedAssistants] = useState<Set<string>>(new Set());
   const [actualDuration, setActualDuration] = useState(false);
+  // Off by default: the band costs 22px of vertical space and answers a
+  // question only one in every few sessions does.
+  const [showTokenUsage, setShowTokenUsage] = useState(false);
   const [timelineRange, setTimelineRange] = useState<{ start: number; end: number } | null>(null);
   const [selectedRecordIndex, setSelectedRecordIndex] = useState<number | null>(null);
 
@@ -416,6 +419,8 @@ function TrajectoryBody({ data, focusTs, sourcePath, onOpenSubagent }: Trajector
         allAssistantsCollapsed={allAssistantsCollapsed}
         actualDuration={actualDuration}
         onToggleDuration={handleToggleDuration}
+        showTokenUsage={showTokenUsage}
+        onToggleTokenUsage={() => setShowTokenUsage((value) => !value)}
         turnCount={turnCount}
         callCount={callCount}
       />
@@ -433,6 +438,7 @@ function TrajectoryBody({ data, focusTs, sourcePath, onOpenSubagent }: Trajector
         range={timelineRange}
         searchMatchIndexes={searchMatchIndexes}
         selectedIndex={selectedRecordIndex}
+        showUsage={showTokenUsage}
         onRangeChange={handleTimelineRangeChange}
         onRecordSelect={setSelectedRecordIndex}
       />

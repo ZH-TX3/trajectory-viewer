@@ -24,6 +24,8 @@ interface TrajectoryTimelineProps {
   searchMatchIndexes?: ReadonlySet<number> | null;
   /** Currently selected record (clicked span) — drawn with a highlight ring. */
   selectedIndex?: number | null;
+  /** Whether to draw the per-turn token band. Off by default. */
+  showUsage?: boolean;
   onRangeChange: (range: { start: number; end: number } | null) => void;
   onRecordSelect?: (index: number) => void;
 }
@@ -36,10 +38,12 @@ const EDGE_PAN_ZONE_FRACTION = 0.08;
 const EDGE_PAN_STEP_FRACTION = 0.025;
 const MAXIMUM_EDGE_PAN_PX = 32;
 
+/** Height of the timeline without the token band. */
+const TIMELINE_HEIGHT = 50;
+
 // Three lane rows end at 3 * 17 = 51px. The usage band sits below them, inside
 // the same projected wrapper as the spans, so it zooms and pans with the lanes
-// instead of needing a second scale. Keep TIMELINE_HEIGHT in sync with the
-// section's `h-[72px]` class.
+// instead of needing a second scale. It only exists while `showUsage` is on.
 const USAGE_BAND_TOP = 53;
 const USAGE_BAND_HEIGHT = 16;
 
@@ -100,7 +104,8 @@ function rangeFraction(
   };
 }
 
-function LaneLabels() {
+/** The lane gutter. `withUsage` adds the Tokens row below the three lanes. */
+function LaneLabels({ withUsage = false }: { withUsage?: boolean }) {
   // Lane rows live at `top: lane * 17 + 1` with 8px bars, so a lane's center
   // is `lane * 17 + 5`. Anchor each label to that exact center so the text
   // lines up with the bars to its right (they share the same 17px pitch).
@@ -115,12 +120,14 @@ function LaneLabels() {
           {label}
         </span>
       ))}
-      <span
-        className="absolute right-1 -translate-y-1/2"
-        style={{ top: USAGE_BAND_TOP + USAGE_BAND_HEIGHT / 2 }}
-      >
-        Tokens
-      </span>
+      {withUsage && (
+        <span
+          className="absolute right-1 -translate-y-1/2"
+          style={{ top: USAGE_BAND_TOP + USAGE_BAND_HEIGHT / 2 }}
+        >
+          Tokens
+        </span>
+      )}
     </div>
   );
 }
@@ -131,14 +138,17 @@ export function TrajectoryTimeline({
   range,
   searchMatchIndexes = null,
   selectedIndex = null,
+  showUsage = false,
   onRangeChange,
   onRecordSelect,
 }: TrajectoryTimelineProps) {
+  const height = showUsage ? TIMELINE_HEIGHT + USAGE_BAND_HEIGHT + 6 : TIMELINE_HEIGHT;
   const model = useMemo(() => deriveTrajectoryTimeline(turns, mode), [turns, mode]);
   // Bars share one scale: the busiest turn fills the band, the rest scale to it.
   const usageMax = useMemo(
-    () => (model === null ? 0 : Math.max(0, ...model.usage.map((usage) => usage.total))),
-    [model],
+    () =>
+      model === null || !showUsage ? 0 : Math.max(0, ...model.usage.map((usage) => usage.total)),
+    [model, showUsage],
   );
   const detailByIndex = useMemo(
     () =>
@@ -461,9 +471,10 @@ export function TrajectoryTimeline({
       <section
         ref={rootRef}
         aria-label="Trajectory timeline"
-        className="h-[72px] border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
+        style={{ height }}
+        className="border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
       >
-        <LaneLabels />
+        <LaneLabels withUsage={showUsage} />
         <div className="flex-1 flex items-center justify-center text-[11px] text-muted-foreground">
           No timing data
         </div>
@@ -491,9 +502,10 @@ export function TrajectoryTimeline({
     <section
       ref={rootRef}
       aria-label="Trajectory timeline"
-      className="relative h-[72px] border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
+      style={{ height }}
+      className="relative border-b border-border/40 bg-muted/30 flex shrink-0 select-none"
     >
-      <LaneLabels />
+      <LaneLabels withUsage={showUsage} />
 
       {/* Track */}
       <div

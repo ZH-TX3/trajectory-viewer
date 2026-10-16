@@ -1,6 +1,6 @@
 // ── Trajectory Toolbar ────────────────────────────────────────────────────
 
-import { Search, ChevronUp, ChevronDown, Clock } from 'lucide-react';
+import { Search, ChevronUp, ChevronDown, Clock, BarChart3 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface TrajectoryToolbarProps {
@@ -12,6 +12,8 @@ interface TrajectoryToolbarProps {
   allAssistantsCollapsed: boolean;
   actualDuration: boolean;
   onToggleDuration: () => void;
+  showTokenUsage: boolean;
+  onToggleTokenUsage: () => void;
   turnCount: number;
   callCount: number;
 }
@@ -25,6 +27,8 @@ export function TrajectoryToolbar({
   allAssistantsCollapsed,
   actualDuration,
   onToggleDuration,
+  showTokenUsage,
+  onToggleTokenUsage,
   turnCount,
   callCount,
 }: TrajectoryToolbarProps) {
@@ -65,6 +69,23 @@ export function TrajectoryToolbar({
       >
         <Clock className="size-3" />
         <span className="hidden sm:inline">Duration</span>
+      </button>
+
+      {/* Token usage band toggle — off by default, the band costs 22px and
+          answers a question most sessions never raise. */}
+      <button
+        onClick={onToggleTokenUsage}
+        aria-pressed={showTokenUsage}
+        title={showTokenUsage ? 'Hide the per-turn token band' : 'Show the per-turn token band'}
+        className={cn(
+          'h-5 px-1.5 text-[11px] rounded transition-colors flex items-center gap-1 shrink-0',
+          showTokenUsage
+            ? 'text-foreground bg-muted/60'
+            : 'text-muted-foreground hover:text-foreground',
+        )}
+      >
+        <BarChart3 className="size-3" />
+        <span className="hidden sm:inline">Tokens</span>
       </button>
 
       {/* Spacer */}

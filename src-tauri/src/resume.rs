@@ -8,7 +8,8 @@
 //   - Windows reuses the OPEN Windows Terminal window: `wt -w 0 nt` adds a tab
 //     to it rather than spawning another window. Without Windows Terminal
 //     installed it falls back to a plain console window.
-//   - macOS runs the command in the frontmost Terminal window via `do script`.
+//   - macOS opens a tab in the open iTerm2 window when iTerm2 is installed,
+//     otherwise runs the command in Terminal.app via `do script`.
 //
 // The command itself is never assembled as one shell string. The session id is
 // validated to the character set the providers actually emit, and the parts are
@@ -247,6 +248,16 @@ enum Launcher {
 /// in a profile, so `where`/`which` cannot see it and only an interactive
 /// shell can run it.
 fn classify(command: &str) -> Launcher {
+    classify_with(command, shell_knows, which)
+}
+
+/// `classify` with its two lookups passed in, so the precedence can be tested
+/// without spawning a shell.
+fn classify_with(
+    command: &str,
+    shell_knows: impl Fn(&str) -> bool,
+    on_path: impl Fn(&str) -> bool,
+) -> Launcher {
     if command.trim().is_empty() {
         return Launcher::Missing;
     }
@@ -258,26 +269,37 @@ fn classify(command: &str) -> Launcher {
             Launcher::Missing
         };
     }
-    if which(command) {
+    // POSIX: the shell goes first, because an alias or function beats PATH when
+    // the user types the name. Checking PATH first sent `cc` to /usr/bin/cc
+    // (clang) on macOS, which always exists, so the alias was never reached.
+    if cfg!(not(windows)) && shell_knows(command) {
+        return Launcher::ShellAlias;
+    }
+    if on_path(command) {
         return Launcher::Direct;
     }
-    // Only the shell lookup is cached, because only it costs a process spawn
-    // (~1s: PowerShell has to load the user's profile). A PATH scan is cheap
-    // enough to redo, and redoing it means a tool installed while the app is
-    // running still shows up.
+    // Windows keeps PATH first, so a plain program never pays for a PowerShell
+    // profile load (~1s).
+    if cfg!(windows) && shell_knows(command) {
+        return Launcher::ShellAlias;
+    }
+    Launcher::Missing
+}
+
+/// Whether the user's shell resolves `command` to something that is not a file
+/// on PATH: an alias or function on POSIX, anything PowerShell finds on Windows.
+///
+/// Only this lookup is cached, because only it costs a process spawn. A PATH scan
+/// is cheap enough to redo, and redoing it means a tool installed while the app
+/// is running still shows up.
+fn shell_knows(command: &str) -> bool {
     let cache = shell_lookup_cache();
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let shell_says = *cache
+    *cache
         .entry(command.to_string())
-        .or_insert_with(|| resolves_in_shell(command));
-    drop(cache);
-    if shell_says {
-        Launcher::ShellAlias
-    } else {
-        Launcher::Missing
-    }
+        .or_insert_with(|| resolves_in_shell(command))
 }
 
 /// Memoised results of `resolves_in_shell`, keyed by command name.
@@ -423,13 +445,27 @@ fn posix_command_line(
 #[cfg(not(windows))]
 fn resolves_in_shell(command: &str) -> bool {
     let shell = login_shell();
-    std::process::Command::new(shell)
+    let Ok(output) = std::process::Command::new(shell)
         .args(["-lic", &format!("command -v {command}")])
-        .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .output()
+    else {
+        return false;
+    };
+    answers_as_alias(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Read the answer `command -v` printed. A file prints an absolute path; an
+/// alias, function or builtin prints something else (`alias cc=...`, or the
+/// bare name). Profile scripts may print banners, so only the last non-empty
+/// line is the answer.
+#[cfg(not(windows))]
+fn answers_as_alias(stdout: &str) -> bool {
+    stdout
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .is_some_and(|line| !line.starts_with('/'))
 }
 
 /// Whether `command` is an executable on `PATH`.
@@ -829,6 +865,9 @@ fn quote_windows_arg(value: &str) -> String {
 /// macOS: run the command in the user's terminal — a new TAB of the window
 /// they already have open, which is what "resume here" means.
 ///
+/// `auto` prefers iTerm2 when it is installed, since Terminal.app is the
+/// fallback that ships with macOS. Terminal.app is used otherwise.
+///
 /// The shell is started as a LOGIN, INTERACTIVE shell so aliases defined in
 /// `~/.zshrc` resolve — an alias is not a program and cannot be exec'd.
 #[cfg(target_os = "macos")]
@@ -841,28 +880,23 @@ fn spawn_terminal(
 ) -> Result<(), String> {
     let shell = login_shell();
     let line = posix_command_line(launcher, command, args, cwd, &shell);
+    let text = line.replace('\\', "\\\\").replace('"', "\\\"");
 
-    // iTerm2 and Terminal.app speak different verbs for the same thing, so the
-    // script is chosen per app rather than shared.
-    let (app, verb, target) = if terminal == "iterm" && terminal_available("iterm") {
+    let use_iterm = matches!(terminal, "iterm" | "auto") && terminal_available("iterm");
+    let (app, script) = if use_iterm {
+        // Reuse the open iTerm2 window: a new tab in it. With no window open
+        // (a cold launch) a window is created instead, so the command does not
+        // land in a stray second tab.
         (
             "iTerm",
-            "create tab with default profile",
-            "current session of current tab of current window",
+            format!(
+                "tell application \"iTerm\"\n  activate\n  if (count of windows) = 0 then\n    create window with default profile\n  else\n    tell current window to create tab with default profile\n  end if\n  tell current session of current window\n    write text \"{text}\"\n  end tell\nend tell"
+            ),
         )
     } else {
-        ("Terminal", "do script", "")
-    };
-
-    let script = if target.is_empty() {
-        format!(
-            "tell application \"{app}\"\n  activate\n  {verb} \"{}\"\nend tell",
-            line.replace('\\', "\\\\").replace('"', "\\\"")
-        )
-    } else {
-        format!(
-            "tell application \"{app}\"\n  activate\n  {verb}\n  tell {target}\n    write text \"{}\"\n  end tell\nend tell",
-            line.replace('\\', "\\\\").replace('"', "\\\"")
+        (
+            "Terminal",
+            format!("tell application \"Terminal\"\n  activate\n  do script \"{text}\"\nend tell"),
         )
     };
     std::process::Command::new("osascript")
@@ -1263,6 +1297,36 @@ mod tests {
             classify(&dir.path().join("absent").to_string_lossy()),
             Launcher::Missing
         );
+    }
+
+    // Regression: macOS ships /usr/bin/cc (clang), so `cc` is always on PATH.
+    // The user's `cc` is an alias for Claude Code, and the alias must win, the
+    // same way it does when typed in a terminal.
+    #[test]
+    #[cfg(not(windows))]
+    fn a_shell_alias_beats_the_same_name_on_path() {
+        assert_eq!(
+            classify_with("cc", |_| true, |_| true),
+            Launcher::ShellAlias
+        );
+        assert_eq!(classify_with("cc", |_| false, |_| true), Launcher::Direct);
+        assert_eq!(classify_with("cc", |_| false, |_| false), Launcher::Missing);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn the_shell_answer_is_read_from_its_last_line() {
+        // A file is reported by its absolute path.
+        assert!(!answers_as_alias("/usr/bin/cc\n"));
+        // An alias prints its definition, a function or builtin its bare name.
+        assert!(answers_as_alias("alias cc='claude'\n"));
+        assert!(answers_as_alias("cc\n"));
+        // Nothing found prints nothing.
+        assert!(!answers_as_alias(""));
+        assert!(!answers_as_alias("  \n\n"));
+        // A profile that prints a banner must not hide the real answer.
+        assert!(!answers_as_alias("Welcome back\n/usr/bin/cc\n"));
+        assert!(answers_as_alias("Welcome back\nalias cc='claude'\n"));
     }
 
     #[test]

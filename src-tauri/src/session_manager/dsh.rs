@@ -9,7 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::session_manager::provider::SessionProvider;
-use crate::session_manager::utils::{decode_project_name, home_dir, truncate};
+use crate::session_manager::utils::{home_dir, truncate};
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 /// Titles are generated early, so this much decompressed input is plenty.
@@ -64,13 +64,16 @@ impl SessionProvider for DshProvider {
             }
         }
 
+        // Computed before the literal below moves `project_dir`.
+        let project_group = project_group(path, project_dir.as_deref());
+
         Some(SessionMeta {
             provider_id: "dsh".to_string(),
             session_id: session_id.clone(),
             title: title.or(first_user).map(|t| truncate(&t, 80)),
             summary: None,
             project_dir,
-            project_group: project_group(path),
+            project_group,
             created_at,
             last_active_at: created_at,
             source_path: Some(path.to_string_lossy().to_string()),
@@ -194,9 +197,69 @@ fn first_text_block(value: &serde_json::Value) -> Option<String> {
 }
 
 /// DSH groups by project: `sessions/{project}/{session-id}/session.jsonl.zstd`.
-fn project_group(path: &Path) -> Option<String> {
+///
+/// The `cwd` recorded in the session header is authoritative, exactly as it is
+/// for Claude: it is the real path, while the directory name is an encoding.
+/// The name is decoded only when a session predates the header.
+fn project_group(path: &Path, cwd: Option<&str>) -> Option<String> {
+    if let Some(cwd) = cwd.map(str::trim).filter(|cwd| !cwd.is_empty()) {
+        return Some(cwd.to_string());
+    }
     let name = path.parent()?.parent()?.file_name()?.to_str()?;
-    Some(decode_project_name(name))
+    Some(decode_dsh_project(name))
+}
+
+/// Decode a DSH project directory name.
+///
+/// DSH writes `--<path>--`, using `-` as the path separator and escaping each
+/// character that is not path-safe as `~XXXX`, a hex code point:
+/// `--C-Users-~9648~5F3A--` is `C:/Users/陈强`.
+///
+/// Claude's decoder does not apply to this shape — its leading `--` is the drive
+/// separator, whereas DSH's is a wrapper. A literal `-` is not escaped, so it
+/// cannot be told apart from a separator; that ambiguity is why the recorded
+/// `cwd` wins whenever it is there.
+fn decode_dsh_project(name: &str) -> String {
+    let inner = name.strip_prefix("--").unwrap_or(name);
+    let inner = inner.strip_suffix("--").unwrap_or(inner);
+    let segments: Vec<String> = inner.split('-').map(unescape_code_points).collect();
+
+    // A lone ASCII letter in front is a Windows drive.
+    if segments.len() >= 2
+        && segments[0].len() == 1
+        && segments[0].chars().all(|c| c.is_ascii_alphabetic())
+    {
+        return format!(
+            "{}:/{}",
+            segments[0].to_ascii_uppercase(),
+            segments[1..].join("/")
+        );
+    }
+    segments.join("/")
+}
+
+/// Expand the `~XXXX` escapes in one path segment. Anything that is not a
+/// four-digit code point is left as a literal tilde.
+fn unescape_code_points(segment: &str) -> String {
+    let mut out = String::new();
+    let mut chars = segment.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '~' {
+            out.push(c);
+            continue;
+        }
+        let hex: String = chars.clone().take(4).collect();
+        match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+            Some(decoded) if hex.len() == 4 => {
+                out.push(decoded);
+                for _ in 0..4 {
+                    chars.next();
+                }
+            }
+            _ => out.push('~'),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -231,11 +294,48 @@ mod tests {
         assert_eq!(meta.session_id, "ses-1");
         assert_eq!(meta.title.as_deref(), Some("Generated Title"));
         assert_eq!(meta.project_dir.as_deref(), Some("/tmp/project"));
-        assert_eq!(meta.project_group.as_deref(), Some("D:/DSH"));
+        // The recorded cwd wins over the directory name, as it does for Claude.
+        assert_eq!(meta.project_group.as_deref(), Some("/tmp/project"));
         assert_eq!(
             meta.resume_command.as_deref(),
             Some("dsh-tui --resume ses-1")
         );
+    }
+
+    // DSH's own encoding, which Claude's decoder does not understand: `--`
+    // wraps the whole path, and every path-unsafe character is `~XXXX`.
+    #[test]
+    fn decode_dsh_project_expands_its_escapes() {
+        assert_eq!(decode_dsh_project("--D-DSH--"), "D:/DSH");
+        assert_eq!(
+            decode_dsh_project("--C-Users-~9648~5F3A--"),
+            "C:/Users/陈强"
+        );
+        assert_eq!(
+            decode_dsh_project("--D-Program~0020Files-nodejs--"),
+            "D:/Program Files/nodejs"
+        );
+        // A literal `-` is indistinguishable from a separator, so it splits.
+        assert_eq!(
+            decode_dsh_project("--D-~0040deepseek-ai--"),
+            "D:/@deepseek/ai"
+        );
+        // A tilde that is not a code point stays a tilde.
+        assert_eq!(decode_dsh_project("--D-a~zz--"), "D:/a~zz");
+    }
+
+    #[test]
+    fn falls_back_to_the_decoded_directory_without_a_cwd() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("--D-DSH--/ses-3/session.jsonl.zstd");
+        write_session(
+            &file,
+            &[r#"{"type":"session","id":"ses-3","createdAt":1787023345223}"#],
+        );
+
+        let meta = DshProvider.parse_session(&file).unwrap();
+        assert_eq!(meta.project_dir, None);
+        assert_eq!(meta.project_group.as_deref(), Some("D:/DSH"));
     }
 
     #[test]

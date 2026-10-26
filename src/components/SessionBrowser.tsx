@@ -190,6 +190,9 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [trajectoryData, setTrajectoryData] = useState<TrajectoryData | null>(null);
   const [trajectoryLoading, setTrajectoryLoading] = useState(false);
+  /** The session `trajectoryData` belongs to. Loading is driven by the mismatch
+   *  with the selection, so clearing the data always triggers a reload. */
+  const [trajectoryFor, setTrajectoryFor] = useState<string | null>(null);
   const dragRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const [customTitles, setCustomTitles] = useState<Record<string, string>>(readCustomTitles);
@@ -401,17 +404,23 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   }, [selectedSession?.providerId, selectedSession?.sourcePath]);
 
   // Load trajectory for the selected session
+  const trajectoryRequestRef = useRef<string | null>(null);
   const loadTrajectory = useCallback(async () => {
     const sp = selectedSession?.sourcePath;
     if (!sp) return;
+    trajectoryRequestRef.current = sp;
     setTrajectoryLoading(true);
     try {
       const data = await api.getSessionTrajectory(selectedSession.providerId, sp);
+      // A request for a session the user has since left must not land on top of
+      // the current one.
+      if (trajectoryRequestRef.current !== sp) return;
       setTrajectoryData(data);
+      setTrajectoryFor(sp);
     } catch (err) {
       console.error('load trajectory failed', err);
     } finally {
-      setTrajectoryLoading(false);
+      if (trajectoryRequestRef.current === sp) setTrajectoryLoading(false);
     }
   }, [selectedSession?.providerId, selectedSession?.sourcePath]);
 
@@ -421,11 +430,19 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     loadMessages();
   }, [loadMessages]);
 
-  // Load trajectory when the tab switches to trajectory
+  // Load whatever the trajectory tab should be showing.
+  //
+  // Driven by the session the loaded data belongs to rather than by the tab
+  // transition alone: a jump that clears the data (a search result, a session
+  // switch) must reload even when neither the tab nor the selection changed,
+  // which is exactly the case that used to leave the pane empty until the user
+  // toggled tabs.
   useEffect(() => {
     if (activeTab !== 'trajectory') return;
+    const sp = selectedSession?.sourcePath;
+    if (!sp || trajectoryFor === sp) return;
     loadTrajectory();
-  }, [activeTab, loadTrajectory]);
+  }, [activeTab, trajectoryFor, selectedSession?.sourcePath, loadTrajectory]);
 
   // Refresh the session list periodically so new / updated sessions surface.
   //
@@ -503,6 +520,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     setOpenMemory(null);
     // Keep the current tab (Messages / Trajectory) across session switches.
     setTrajectoryData(null);
+    setTrajectoryFor(null);
     setFocusTs(null);
   }, []);
 
@@ -530,6 +548,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
       });
       setSelectedKey(group.sessionKey);
       setTrajectoryData(null);
+      setTrajectoryFor(null);
       // Land on Trajectory and jump to the exact matched message.
       setActiveTab('trajectory');
       setFocusTs(focusTs);
@@ -1166,7 +1185,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                   <div className="flex items-center justify-center h-20 text-xs text-muted-foreground">
                     <Loader2 className="size-3 animate-spin mr-2" />Loading trajectory…
                   </div>
-                ) : trajectoryData ? (
+                ) : trajectoryData && trajectoryFor === selectedSession?.sourcePath ? (
                   <TrajectoryErrorBoundary>
                     <TrajectoryView
                       data={trajectoryData}

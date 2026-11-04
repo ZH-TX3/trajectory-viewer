@@ -439,6 +439,8 @@ export interface ResumeOutcome {
   workingDir: string | null;
   /** The recorded working directory no longer exists. */
   cwdMissing: boolean;
+  /** This app is elevated, which is why Terminal opened its own window. */
+  elevated: boolean;
 }
 
 // ── Update check ─────────────────────────────────────────────────────────

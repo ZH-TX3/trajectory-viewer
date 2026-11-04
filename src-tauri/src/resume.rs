@@ -228,6 +228,9 @@ pub struct ResumeOutcome {
     pub working_dir: Option<String>,
     /// Set when the recorded working directory no longer exists.
     pub cwd_missing: bool,
+    /// Set when this process is elevated — the reason Terminal opened a window
+    /// of its own instead of a tab in the one already running.
+    pub elevated: bool,
 }
 
 /// How a configured command has to be started.
@@ -627,10 +630,49 @@ pub fn launch(
         command_line,
         working_dir: working_dir.map(|p| p.to_string_lossy().to_string()),
         cwd_missing,
+        elevated: is_elevated(),
     })
 }
 
 // ── Platform launchers ────────────────────────────────────────────────────
+
+/// Whether this process holds an elevated token.
+///
+/// Windows will not let an elevated process add a tab to a Terminal window
+/// owned by a non-elevated one: Terminal refuses the hand-off and opens a
+/// window of its own, carrying this process's elevation. Nothing on our side
+/// can bridge that, so the outcome reports it and the UI explains it.
+///
+/// `whoami /groups` is used rather than a token API because the integrity-level
+/// SID is ASCII and not localised, unlike the group names around it.
+#[cfg(windows)]
+fn is_elevated() -> bool {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    use std::os::windows::process::CommandExt;
+
+    let Ok(output) = std::process::Command::new("whoami")
+        .args(["/groups"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return false;
+    };
+    elevated_from_groups(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(not(windows))]
+fn is_elevated() -> bool {
+    false
+}
+
+/// Read the mandatory integrity level out of `whoami /groups` output.
+///
+/// `S-1-16-12288` is the "high" level — an elevated token. `S-1-16-8192` is
+/// medium, which is what a normally-launched process runs at.
+#[cfg(any(windows, test))]
+fn elevated_from_groups(groups: &str) -> bool {
+    groups.contains("S-1-16-12288")
+}
 
 /// Where Windows Terminal's `wt.exe` lives, when it is installed.
 ///
@@ -1265,6 +1307,20 @@ mod tests {
 
         assert!(!found_without_bit);
         assert!(found_with_bit);
+    }
+
+    // An elevated process cannot add a tab to a Terminal window owned by a
+    // non-elevated one, so the launcher reports it instead of pretending the
+    // new window was the intent.
+    #[test]
+    fn elevation_is_read_from_the_integrity_level_sid() {
+        assert!(elevated_from_groups(
+            "Mandatory Label\\High Mandatory Level Label S-1-16-12288"
+        ));
+        assert!(!elevated_from_groups(
+            "Mandatory Label\\Medium Mandatory Level Label S-1-16-8192"
+        ));
+        assert!(!elevated_from_groups(""));
     }
 
     // The shell lookup is the expensive one, so its result is memoised. A

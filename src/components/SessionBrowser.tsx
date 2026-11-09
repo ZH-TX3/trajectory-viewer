@@ -644,12 +644,22 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
         selectedSession.sessionId,
         selectedSession.projectDir ?? null,
       );
-      showNotice(
-        'ok',
-        outcome.cwdMissing
-          ? `Opened in ${outcome.workingDir ?? 'home'} — the session's project folder is gone`
-          : `Opened terminal: ${outcome.commandLine}`,
-      );
+      if (outcome.elevated) {
+        // Windows will not let an elevated process add a tab to a Terminal
+        // window owned by a non-elevated one, so say why instead of leaving the
+        // new window looking like the intended behaviour.
+        showNotice(
+          'error',
+          'Opened a new window: Windows Terminal cannot add a tab while Trajectory Viewer runs as administrator. Start it normally to attach to the existing window.',
+        );
+      } else if (outcome.cwdMissing) {
+        showNotice(
+          'ok',
+          `Opened in ${outcome.workingDir ?? 'home'} — the session's project folder is gone`,
+        );
+      } else {
+        showNotice('ok', `Opened terminal: ${outcome.commandLine}`);
+      }
     } catch (err) {
       showNotice('error', String(err));
     } finally {

@@ -379,7 +379,7 @@ fn resolves_in_shell(command: &str) -> bool {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     // Deliberately WITHOUT -NoProfile: the whole point is to load it.
-    std::process::Command::new("powershell")
+    std::process::Command::new(powershell_program())
         .args(["-Command", &format!("Get-Command {command}")])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -471,6 +471,96 @@ fn answers_as_alias(stdout: &str) -> bool {
         .is_some_and(|line| !line.starts_with('/'))
 }
 
+/// Expand `%NAME%` references inside a PATH entry.
+///
+/// Windows expands these only when the registry value is `REG_EXPAND_SZ`. A PATH
+/// written as a plain `REG_SZ` (an installer or `setx` can do that) reaches the
+/// process with the references intact, so a directory spelled `%NVM_SYMLINK%` is
+/// never found — and every CLI installed under it reads as missing. This is the
+/// difference between a dev run (started from a shell that already repaired
+/// PATH) and the installed app, which inherits it straight from Explorer.
+///
+/// Names the process does not carry are left as they were, so the worst case is
+/// the behaviour we had before.
+#[cfg(windows)]
+fn expand_env_refs(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(open) = rest.find('%') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('%') else {
+            // A trailing lone `%` is literal.
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let name = &after[..close];
+        match std::env::var(name) {
+            Ok(expanded) if !name.is_empty() => out.push_str(&expanded),
+            _ => {
+                out.push('%');
+                out.push_str(name);
+                out.push('%');
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Every directory on PATH, with `%NAME%` references resolved.
+#[cfg(windows)]
+fn path_dirs() -> Vec<PathBuf> {
+    let Ok(path) = std::env::var("PATH") else {
+        return Vec::new();
+    };
+    std::env::split_paths(&path)
+        .map(|dir| PathBuf::from(expand_env_refs(&dir.to_string_lossy())))
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .collect()
+}
+
+/// The PATH a spawned terminal should inherit when the one we hold is unusable.
+///
+/// `None` when PATH carries no `%NAME%` reference, so a healthy machine passes
+/// nothing and the child keeps exactly what it would have inherited.
+#[cfg(windows)]
+fn repaired_path() -> Option<String> {
+    let raw = std::env::var("PATH").ok()?;
+    if !raw.contains('%') {
+        return None;
+    }
+    Some(
+        path_dirs()
+            .iter()
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(";"),
+    )
+}
+
+/// `powershell.exe`, resolved without relying on PATH.
+///
+/// On the same machine that leaves `%SYSTEMROOT%\System32\WindowsPowerShell\
+/// v1.0\` unexpanded, `Command::new("powershell")` finds nothing — which reads
+/// as "the alias does not exist". `%SystemRoot%` itself is always set, so the
+/// absolute location is derived from it.
+#[cfg(windows)]
+fn powershell_program() -> PathBuf {
+    std::env::var("SystemRoot")
+        .ok()
+        .map(|root| {
+            Path::new(&root)
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        })
+        .filter(|exe| exe.is_file())
+        .unwrap_or_else(|| PathBuf::from("powershell"))
+}
+
 /// Whether `command` is an executable on `PATH`.
 ///
 /// A pure PATH scan, deliberately not `cmd /c where` or `which`: spawning a
@@ -478,9 +568,6 @@ fn answers_as_alias(stdout: &str) -> bool {
 /// provider every time the settings pane opens.
 #[cfg(windows)]
 fn which(command: &str) -> bool {
-    let Ok(path) = std::env::var("PATH") else {
-        return false;
-    };
     // `where` resolves through PATHEXT, so a bare `codex` matches `codex.cmd`.
     let extensions: Vec<String> = std::env::var("PATHEXT")
         .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
@@ -491,10 +578,7 @@ fn which(command: &str) -> bool {
     // A name that already carries an extension is matched as-is; Windows
     // filesystems are case-insensitive, so no case folding is needed.
     let has_extension = Path::new(command).extension().is_some();
-    for dir in std::env::split_paths(&path) {
-        if dir.as_os_str().is_empty() {
-            continue;
-        }
+    for dir in path_dirs() {
         if dir.join(command).is_file() {
             return true;
         }
@@ -761,7 +845,7 @@ fn shell_invocation(
             .collect::<Vec<_>>()
             .join(" ");
         (
-            "powershell".to_string(),
+            powershell_program().to_string_lossy().into_owned(),
             vec!["-NoExit".to_string(), "-Command".to_string(), line],
         )
     } else {
@@ -846,6 +930,13 @@ fn spawn_windows_terminal(
     cmd.arg(program);
     cmd.args(program_args);
 
+    // The tab inherits this process's environment, so an unexpanded PATH is
+    // handed down with it and the resumed CLI cannot be found inside the new
+    // shell. Repairing it here is what makes the tab actually run the command.
+    if let Some(path) = repaired_path() {
+        cmd.env("PATH", path);
+    }
+
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -884,6 +975,9 @@ fn spawn_console_window(
     cmd.raw_arg(&inner);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
+    }
+    if let Some(path) = repaired_path() {
+        cmd.env("PATH", path);
     }
     // Detach the console entirely: a `/k` window would otherwise inherit this
     // process's stdio handles and keep them open for as long as it lives.
@@ -1455,5 +1549,63 @@ mod tests {
         // only assert the path handling here.
         let gone = PathBuf::from("Z:/definitely/not/here");
         assert!(!gone.is_dir());
+    }
+
+    // Regression: the installed app inherits its PATH from Explorer, and on a
+    // machine whose PATH is stored as REG_SZ the `%NAME%` references arrive
+    // intact — so the nvm directory holding every CLI disappeared and each
+    // provider read as "missing".
+    #[test]
+    #[cfg(windows)]
+    fn a_path_entry_carries_its_variables_until_they_are_expanded() {
+        let root = std::env::var("SystemRoot").expect("SystemRoot is always set");
+        assert_eq!(
+            expand_env_refs(r"%SystemRoot%\system32"),
+            format!("{root}\\system32")
+        );
+        // Names the process does not carry, and stray percent signs, survive.
+        assert_eq!(
+            expand_env_refs(r"%DEFINITELY_NOT_SET_XYZ%\bin"),
+            r"%DEFINITELY_NOT_SET_XYZ%\bin"
+        );
+        assert_eq!(expand_env_refs("100%"), "100%");
+        assert_eq!(expand_env_refs("%%"), "%%");
+        assert_eq!(expand_env_refs(r"C:\plain\dir"), r"C:\plain\dir");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn which_sees_through_an_unexpanded_path_entry() {
+        // PATH and the test's own variables are process-global; take the shared
+        // lock the other env-touching tests use so this cannot race them.
+        let _guard = crate::trajectory::parser::opencode::opencode_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tv-unexpanded-probe.cmd"), b"@echo off\r\n").unwrap();
+
+        let saved_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("TV_PROBE_DIR", dir.path());
+        // The entry is a reference, not a path — exactly what Explorer hands the
+        // installed app.
+        std::env::set_var("PATH", "%TV_PROBE_DIR%");
+        let found = which("tv-unexpanded-probe");
+        std::env::set_var("PATH", saved_path);
+        std::env::remove_var("TV_PROBE_DIR");
+
+        assert!(found, "an unexpanded PATH entry must still be searched");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_path_without_references_is_left_alone() {
+        // Only a PATH that carries `%NAME%` needs handing to a child; a healthy
+        // one must not be rewritten.
+        let raw = std::env::var("PATH").unwrap_or_default();
+        match repaired_path() {
+            Some(_) => assert!(raw.contains('%'), "repaired only when references remain"),
+            None => assert!(!raw.contains('%')),
+        }
     }
 }

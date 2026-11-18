@@ -30,6 +30,12 @@ interface TrajectoryViewProps {
    */
   focusTs?: number | null;
   /**
+   * Bumped each time `focusTs` is asked for again, so jumping to the turn that
+   * is already focused re-runs the scroll instead of being swallowed as the same
+   * value it saw last time.
+   */
+  focusSeq?: number;
+  /**
    * The session file on disk. Subagent transcripts live beside it, so this is
    * what makes drill-down and inline expansion possible; without it the view
    * stays flat.
@@ -42,7 +48,7 @@ interface DrillEntry {
   data: TrajectoryData;
 }
 
-export function TrajectoryView({ data, focusTs, sourcePath }: TrajectoryViewProps) {
+export function TrajectoryView({ data, focusTs, focusSeq, sourcePath }: TrajectoryViewProps) {
   // One entry per drilled-in subagent; the last one is what's on screen.
   const [stack, setStack] = useState<DrillEntry[]>([]);
   const [drillError, setDrillError] = useState<string | null>(null);
@@ -120,6 +126,7 @@ export function TrajectoryView({ data, focusTs, sourcePath }: TrajectoryViewProp
         key={active?.run.agentId ?? 'root'}
         data={active?.data ?? data}
         focusTs={focusTs}
+        focusSeq={focusSeq}
         sourcePath={sourcePath}
         onOpenSubagent={sourcePath == null ? undefined : handleOpenSubagent}
       />
@@ -143,11 +150,12 @@ function subagentLabel(run: SubagentRun): string {
 interface TrajectoryBodyProps {
   data: TrajectoryData;
   focusTs?: number | null;
+  focusSeq?: number;
   sourcePath?: string | null;
   onOpenSubagent?: (run: SubagentRun) => void;
 }
 
-function TrajectoryBody({ data, focusTs, sourcePath, onOpenSubagent }: TrajectoryBodyProps) {
+function TrajectoryBody({ data, focusTs, focusSeq, sourcePath, onOpenSubagent }: TrajectoryBodyProps) {
   // UI state
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedTurns, setCollapsedTurns] = useState<Set<number>>(new Set());
@@ -267,7 +275,7 @@ function TrajectoryBody({ data, focusTs, sourcePath, onOpenSubagent }: Trajector
       }
     }
     if (bestIndex !== null) setSelectedRecordIndex(bestIndex);
-  }, [focusTs, turns]);
+  }, [focusTs, focusSeq, turns]);
 
   // Search index (ported from DSH TrajectorySearchIndex): one stable index
   // keyed by record id, rebuilt as layouts change, queried for the input.

@@ -116,6 +116,17 @@ export function isTaskNotification(text: string | null | undefined): boolean {
   return text != null && text.trimStart().startsWith('<task-notification>');
 }
 
+/**
+ * Whether a user-role payload is injected context rather than something typed:
+ * workspace reminders and subagent task notifications.
+ *
+ * One predicate for the whole Messages view — the outline rail and the rows it
+ * points at have to agree on which turns count, or the numbering drifts.
+ */
+export function isInjectedContext(content: string): boolean {
+  return content.includes('<system-reminder>') || isTaskNotification(content);
+}
+
 /** Read `<tag>value</tag>` out of a task notification body. */
 function xmlField(text: string, tag: string): string | null {
   const open = `<${tag}>`;

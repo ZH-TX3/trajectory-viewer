@@ -4,6 +4,7 @@ mod backup;
 mod commands;
 mod config_hub;
 mod export;
+mod fork;
 mod resume;
 mod search;
 mod session_manager;
@@ -39,6 +40,7 @@ pub fn run() {
             commands::set_backup_settings,
             commands::export_session,
             commands::resume_session_in_terminal,
+            commands::fork_session_at_node,
             commands::resume_command_available,
             commands::resume_command_statuses,
             commands::resume_terminals,

@@ -73,6 +73,11 @@ pub struct SessionMessage {
     /// run. Empty for providers without subagents.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subagents: Vec<crate::trajectory::subagent::SubagentRun>,
+    /// The transcript record this message came from, when the provider records
+    /// one. A forked conversation starts at a node, so the UI needs the node's
+    /// own id to point at it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
 }
 
 /// Scan every registered provider and merge the results, newest first.

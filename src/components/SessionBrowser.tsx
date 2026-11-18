@@ -10,11 +10,13 @@ import { TrajectoryView } from './TrajectoryView';
 import { TrajectoryErrorBoundary } from './TrajectoryErrorBoundary';
 import { SidebarSearch } from './SidebarSearch';
 import { SubagentCard } from './SubagentCard';
+import { MessageOutline, MessageTurnList } from './MessageOutline';
 import { MemoryTree, MemoryViewer } from './MemoryPanel';
 import type { OpenMemory } from './MemoryPanel';
 import type { ProviderCommand, SessionMeta, SessionMessage, TrajectoryData } from '../types';
 import { cn } from '../lib/utils';
-import { isTaskNotification, parseTaskNotification, resumeCommandText } from '../utils/format';
+import { isInjectedContext, isTaskNotification, parseTaskNotification, resumeCommandText } from '../utils/format';
+import { deriveOutline } from '../utils/outline';
 import { remapWheelToHorizontal } from '../utils/scroll';
 import {
   ClaudeMark, CodexMark, DshMark, OpenCodeLogoDarkAware,
@@ -22,7 +24,7 @@ import {
 import {
   MessageSquare, GitBranch, Clock, FileText, Loader2,
   ChevronRight, ChevronDown, Folder, FolderOpen, GripVertical,
-  Pencil, Trash2, Copy, Check, RotateCw, Download, SquareTerminal,
+  Pencil, Trash2, Copy, Check, RotateCw, Download, SquareTerminal, List,
 } from 'lucide-react';
 
 // Custom session titles are persisted locally, keyed by provider::sessionId.
@@ -215,12 +217,25 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
   // loaded; `false` once known to be missing, which disables the button.
   const [resumeCommand, setResumeCommand] = useState<string | null>(null);
   const [resumeAvailable, setResumeAvailable] = useState<boolean | null>(null);
+  // The message whose conversation is being forked, so only that row spins.
+  const [forkingFrom, setForkingFrom] = useState<string | null>(null);
+  // Outline navigation: the turn in view, and a short flash on the one jumped to.
+  const [outlineActive, setOutlineActive] = useState<number | null>(null);
+  // The header's readable list of turns — the rail's ticks with words on them.
+  const [turnListOpen, setTurnListOpen] = useState(false);
+  const [flashIndex, setFlashIndex] = useState<number | null>(null);
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const messageRefs = useRef(new Map<number, HTMLDivElement>());
+  const scrollFrameRef = useRef<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   // Timestamp of the matched message to focus after opening a cross-session
   // result — the table scrolls to and opens that record, instead of drowning
   // the whole session in highlights.
   const [focusTs, setFocusTs] = useState<number | null>(null);
+  // Bumped on every jump, so asking for the turn that is already focused runs
+  // again instead of looking like the same request as last time.
+  const [focusSeq, setFocusSeq] = useState(0);
   // Cross-session search query; owned here so ESC can clear it and return the
   // sidebar to the normal session list.
   const [searchQuery, setSearchQuery] = useState('');
@@ -353,6 +368,66 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
     if (!selectedKey) return null;
     return sessions.find((s) => `${s.providerId}::${s.sessionId}` === selectedKey) ?? null;
   }, [sessions, selectedKey]);
+
+  // One outline entry per turn the reader actually typed — the same set that is
+  // drawn as a "user" row, so the numbering matches what the eye sees.
+  const outlineItems = useMemo(() => deriveOutline(messages), [messages]);
+
+  // A different transcript means a different outline; nothing carries over.
+  useEffect(() => {
+    setOutlineActive(null);
+    setFlashIndex(null);
+    messageRefs.current.clear();
+  }, [selectedSession?.sourcePath]);
+
+  const scrollToMessage = useCallback((index: number) => {
+    const row = messageRefs.current.get(index);
+    if (!row) return;
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setOutlineActive(index);
+    setFlashIndex(index);
+    window.setTimeout(() => setFlashIndex(null), 1400);
+  }, []);
+
+  // One jump for both tabs: the transcript locates a turn by position, the
+  // Trajectory ledger locates a record by time.
+  const jumpToTurn = useCallback(
+    (index: number) => {
+      if (activeTab === 'messages') {
+        scrollToMessage(index);
+        return;
+      }
+      const item = outlineItems.find((entry) => entry.index === index);
+      if (item?.ts == null) return;
+      setFocusTs(item.ts);
+      setFocusSeq((seq) => seq + 1);
+    },
+    [activeTab, outlineItems, scrollToMessage],
+  );
+
+  // Which turn is currently in view, for the rail's highlight. Every row's
+  // position is read in one animation frame rather than per scroll event, so a
+  // long transcript does not thrash layout while scrolling.
+  const trackOutline = useCallback(() => {
+    // A jump in progress owns the highlight; re-deriving it mid-scroll would
+    // snatch the highlight back to the turn above the one just chosen.
+    if (flashIndex !== null) return;
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const scroller = messagesScrollRef.current;
+      if (!scroller) return;
+      const anchor = scroller.getBoundingClientRect().top + 72;
+      let current: number | null = null;
+      for (const item of outlineItems) {
+        const row = messageRefs.current.get(item.index);
+        if (!row) continue;
+        if (row.getBoundingClientRect().top > anchor) break;
+        current = item.index;
+      }
+      setOutlineActive(current);
+    });
+  }, [outlineItems, flashIndex]);
 
   // Probe the selected provider's launcher so the Resume button can disable
   // itself (with a reason) rather than opening a tab that immediately errors.
@@ -666,6 +741,35 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
       setResuming(false);
     }
   }, [selectedSession, showNotice]);
+
+  // "Restore conversation" forks at this message: the backend writes a NEW
+  // transcript that ends on it, and the CLI resumes that one. The session being
+  // read is never modified, so the branch can be explored freely — and the fork
+  // shows up in the sidebar as its own session.
+  const restoreFromMessage = useCallback(
+    async (messageUuid: string) => {
+      const sourcePath = selectedSession?.sourcePath;
+      if (!selectedSession || !sourcePath) return;
+      setForkingFrom(messageUuid);
+      try {
+        const fork = await api.forkSessionAt(selectedSession.providerId, sourcePath, messageUuid);
+        // The fork is a real transcript now, so the list can show it before the
+        // terminal opens.
+        await refreshAll();
+        const outcome = await api.resumeSessionInTerminal(
+          selectedSession.providerId,
+          fork.sessionId,
+          fork.cwd ?? selectedSession.projectDir ?? null,
+        );
+        showNotice('ok', `Forked ${fork.messages} message(s) — ${outcome.commandLine}`);
+      } catch (err) {
+        showNotice('error', String(err));
+      } finally {
+        setForkingFrom(null);
+      }
+    },
+    [selectedSession, refreshAll, showNotice],
+  );
 
   function sessionTitle(s: SessionMeta) {
     return (
@@ -1031,6 +1135,38 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
               <span className="text-xs font-medium truncate">{sessionTitle(selectedSession)}</span>
 
               <div className="flex ml-auto gap-1">
+                {/* Turn list: the rail's ticks, readable. Both tabs use it —
+                    Messages scrolls to the turn, Trajectory opens the record
+                    with that timestamp. */}
+                {outlineItems.length > 0 && (
+                  <div className="relative">
+                    <button
+                      onClick={() => setTurnListOpen((open) => !open)}
+                      title="All user messages"
+                      aria-label="All user messages"
+                      aria-expanded={turnListOpen}
+                      className="flex items-center px-2 py-1.5 rounded-md text-[11px] text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 transition-colors"
+                    >
+                      <List className="size-3.5" />
+                    </button>
+                    {turnListOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40"
+                          onClick={() => setTurnListOpen(false)}
+                        />
+                        <MessageTurnList
+                          items={outlineItems}
+                          onSelect={(index) => {
+                            jumpToTurn(index);
+                            setTurnListOpen(false);
+                          }}
+                          onClose={() => setTurnListOpen(false)}
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
                 {/* Export menu */}
                 <div className="relative">
                   <button
@@ -1129,7 +1265,14 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                     </button>
                   </div>
                 )}
-                <div className="flex-1 overflow-auto p-4 space-y-3">
+                <div className="relative flex-1 min-h-0">
+                <div
+                  ref={messagesScrollRef}
+                  onScroll={trackOutline}
+                  // The rail floats over the transcript's right edge, so the
+                  // text is kept clear of it.
+                  className="h-full overflow-auto p-4 pr-12 space-y-3"
+                >
                 {messagesLoading ? (
                   <div className="flex items-center justify-center h-20 text-xs text-muted-foreground">
                     <Loader2 className="size-3 animate-spin mr-2" />Loading messages…
@@ -1141,21 +1284,44 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                     // Injected context arrives as a user-role payload: workspace
                     // reminders and subagent task notifications. Surface both as
                     // "system" like DSH does, so they don't read as user input.
-                    const injected =
-                      msg.role === 'user' &&
-                      (msg.content.includes('<system-reminder>') ||
-                        isTaskNotification(msg.content));
+                    const injected = msg.role === 'user' && isInjectedContext(msg.content);
                     // A dispatch row is its own kind, like Trajectory's SUBAGENT.
                     const isDispatch = msg.subagents != null && msg.subagents.length > 0;
                     const role = injected ? 'system' : isDispatch ? 'subagent' : msg.role;
                     const label = isTaskNotification(msg.content) ? 'subagent' : role;
+                    // A fork point has to be a real user turn with a record id to
+                    // point at. Only Claude transcripts can be copied for now.
+                    const restorable =
+                      msg.role === 'user' &&
+                      !injected &&
+                      !!msg.uuid &&
+                      selectedSession?.providerId === 'claude';
                     return (
-                    <div key={i} className="flex gap-3">
+                    <div
+                      key={i}
+                      ref={(row) => {
+                        // The outline scrolls by element, so every row has to be
+                        // reachable from its index.
+                        if (row) messageRefs.current.set(i, row);
+                        else messageRefs.current.delete(i);
+                      }}
+                      className={cn(
+                        'flex gap-3',
+                        // The reader's own turns are the spine of the transcript,
+                        // so they get a card of their own instead of blending into
+                        // the wall of assistant prose.
+                        role === 'user'
+                          && 'rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] px-2 py-1.5 dark:bg-emerald-400/[0.07]',
+                        // Jumped-to rows say so for a moment, so the eye lands on
+                        // the right turn in a wall of similar ones.
+                        flashIndex === i && 'ring-2 ring-emerald-500/60',
+                      )}
+                    >
                       <div className={`
                         shrink-0 w-16 text-[10px] font-mono text-right pt-1
                         ${role === 'system' ? 'text-cyan-600 dark:text-cyan-400' : ''}
                         ${role === 'subagent' ? 'text-cyan-600 dark:text-cyan-400' : ''}
-                        ${role === 'user' ? 'text-emerald-600 dark:text-emerald-400' : ''}
+                        ${role === 'user' ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : ''}
                         ${role === 'assistant' ? 'text-violet-600 dark:text-violet-400' : ''}
                         ${role === 'tool' ? 'text-amber-600 dark:text-amber-400' : ''}
                       `}>
@@ -1177,14 +1343,39 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                         ) : (
                           <MessageContent text={msg.content} />
                         )}
-                        {msg.ts && (
-                          <div className="text-[10px] text-muted-foreground/50 mt-1">{formatTime(msg.ts)}</div>
+                        {(msg.ts || (restorable)) && (
+                          <div className="flex items-center gap-2 mt-1">
+                            {msg.ts && (
+                              <span className="text-[10px] text-muted-foreground/50">{formatTime(msg.ts)}</span>
+                            )}
+                            {restorable && (
+                              <button
+                                onClick={() => msg.uuid && void restoreFromMessage(msg.uuid)}
+                                disabled={forkingFrom !== null}
+                                title="Fork a new conversation from this message — this session is left untouched"
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-500/30 text-[10px] text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {forkingFrom === msg.uuid ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <GitBranch className="size-3" />
+                                )}
+                                Restore conversation
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
                     );
                   })
                 )}
+                </div>
+                <MessageOutline
+                  items={outlineItems}
+                  activeIndex={outlineActive}
+                  onSelect={scrollToMessage}
+                />
                 </div>
               </div>
             )}
@@ -1200,6 +1391,7 @@ export function SessionBrowser({ onOpenFile, enabledProviders, providerOrder = [
                     <TrajectoryView
                       data={trajectoryData}
                       focusTs={focusTs}
+                      focusSeq={focusSeq}
                       sourcePath={selectedSession?.sourcePath}
                     />
                   </TrajectoryErrorBoundary>

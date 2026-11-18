@@ -273,6 +273,17 @@ pub fn resume_session_in_terminal(
     crate::resume::launch(&provider_id, &session_id, cwd.as_deref())
 }
 
+/// Write a new transcript that ends at `message_uuid` — a fork the CLI can
+/// continue, leaving the session it was taken from untouched.
+#[tauri::command]
+pub fn fork_session_at_node(
+    provider_id: String,
+    source_path: String,
+    message_uuid: String,
+) -> Result<crate::fork::ForkOutcome, String> {
+    crate::fork::fork(&provider_id, &source_path, &message_uuid)
+}
+
 /// Whether a provider's configured resume command can actually be started.
 #[tauri::command]
 pub async fn resume_command_available(provider_id: String) -> bool {

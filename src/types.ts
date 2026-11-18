@@ -154,6 +154,9 @@ export interface SessionMessage {
   /** Subagents this message dispatched (Claude only; absent elsewhere). One
    *  assistant message can hold several `Agent` calls. */
   subagents?: SubagentRun[];
+  /** The transcript record this message came from (Claude only). A restored
+   *  conversation starts at a node, so the node's own id names the fork point. */
+  uuid?: string | null;
 }
 
 // ── Backup & Restore Types ───────────────────────────────────────────────
@@ -441,6 +444,19 @@ export interface ResumeOutcome {
   cwdMissing: boolean;
   /** This app is elevated, which is why Terminal opened its own window. */
   elevated: boolean;
+}
+
+/** A conversation forked at one message. The session it came from is untouched:
+ *  the backend writes a second transcript that ends at the chosen node. */
+export interface ForkOutcome {
+  /** The new session's id — what the CLI resumes. */
+  sessionId: string;
+  /** The transcript that was written. */
+  sourcePath: string;
+  /** Directory the original conversation ran in. */
+  cwd: string | null;
+  /** Records carried over, so a short fork can be reported as such. */
+  messages: number;
 }
 
 // ── Update check ─────────────────────────────────────────────────────────

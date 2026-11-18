@@ -25,6 +25,7 @@ import type {
   SearchIndexStatus,
   ResumeOutcome,
   ResumeSettings,
+  ForkOutcome,
   ProviderCommand,
   TerminalStatus,
   MemoryDoc,
@@ -156,6 +157,16 @@ export const api = {
     cwd: string | null,
   ): Promise<ResumeOutcome> {
     return await invoke('resume_session_in_terminal', { providerId, sessionId, cwd });
+  },
+
+  /** Fork the conversation at `messageUuid` into a brand-new session. The
+   *  session it was taken from is only ever read. */
+  async forkSessionAt(
+    providerId: string,
+    sourcePath: string,
+    messageUuid: string,
+  ): Promise<ForkOutcome> {
+    return await invoke('fork_session_at_node', { providerId, sourcePath, messageUuid });
   },
 
   /** Markdown memory documents for the project this session belongs to. */

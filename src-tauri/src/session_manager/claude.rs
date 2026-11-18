@@ -252,6 +252,10 @@ pub fn load_messages_with_runs(path: &Path, runs_of: &Path) -> Result<Vec<Sessio
             content,
             ts: value.get("timestamp").and_then(parse_timestamp_to_ms),
             subagents,
+            uuid: value
+                .get("uuid")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
         });
     }
 
